@@ -1,0 +1,9 @@
+{
+  "name": "kt-anno-realmod",
+  "author": "ZXS",
+  "description": "kt-annotations real Mindustry mod test: entity components, structs, logic statements, remote calls, region loading",
+  "version": "0.1.0",
+  "minGameVersion": 145,
+  "java": true,
+  "main": "io.eve.realmod.RealMod"
+}
