@@ -17,6 +17,7 @@ object RegionGenerator {
         val loadFields = classes.flatMap { cls ->
             cls.fields.filter { it.annotations.containsKey("Load") }.map { Triple(cls, it, it.annotations.getValue("Load")) }
         }
+        System.err.println("[kt-annot] RegionGenerator: loadFields=${loadFields.size}, fields=${loadFields.map { t -> "${t.first.name}.${t.second.name}: keys=${t.third.keys}" }}")
         if (loadFields.isEmpty()) return
 
         val grouped = loadFields.groupBy { it.first.fullName }
@@ -33,6 +34,7 @@ object RegionGenerator {
         grouped.keys.forEach { fqn ->
             if (fqn.contains(".")) {
                 fileBuilder.addImport(fqn.substringBeforeLast('.'), fqn.substringAfterLast('.'))
+        fileBuilder.addImport("arc.graphics.g2d", "TextureRegion")
             }
         }
         fileBuilder.addType(TypeSpec.objectBuilder("ContentRegions").addFunction(fn).build())
@@ -45,20 +47,17 @@ object RegionGenerator {
             val simple = typeName.substringAfterLast('.')
             sb.append("if (content is $simple) {\n")
             fields.sortedBy { it.second.name }.forEach { (_, field, ann) ->
-                val dims = count(ann["value"] ?: "", "[]")
                 val doFallback = ann["fallback"]?.let { it != "error" } ?: false
                 val fallbackSuffix = if (doFallback) ", ${parse(ann["fallback"]!!, "content")}" else ""
-                if (dims == 0) {
-                    sb.append("  content.${field.name} = $atlas.find(${parse(ann["value"] ?: "", "content")}$fallbackSuffix)\n")
+                val arrayLen = ann["length"]?.toIntOrNull()
+                val hasLength = arrayLen != null || ann.containsKey("lengths")
+                if (hasLength) {
+                    val len = arrayLen ?: 1
+                    sb.append("  for (INDEX0 in 0 until $len) {\n")
+                    sb.append("    content.${field.name}[INDEX0] = $atlas.find(${parse(ann["value"] ?: "", "content")}$fallbackSuffix)\n")
+                    sb.append("  }\n")
                 } else {
-                    val lengths = if (ann.containsKey("lengths")) parseArray(ann["lengths"]!!) else intArrayOf(ann["length"]?.toIntOrNull() ?: 1)
-                    if (dims != lengths.size) error("Length dimensions must match array dimensions: $dims != ${lengths.size} for ${field.name}")
-                    val lengthStr = lengths.joinToString("") { "[$it]" }
-                    sb.append("  content.${field.name} = TextureRegion$lengthStr\n")
-                    for (i in 0 until dims) sb.append("  for (INDEX$i in 0 until ${lengths[i]}) {\n")
-                    val indexStr = (0 until dims).joinToString("") { "[INDEX$it]" }
-                    sb.append("    content.${field.name}$indexStr = $atlas.find(${parse(ann["value"] ?: "", "content")}$fallbackSuffix)\n")
-                    for (i in 0 until dims) sb.append("  }\n")
+                    sb.append("  content.${field.name} = $atlas.find(${parse(ann["value"] ?: "", "content")}$fallbackSuffix)\n")
                 }
             }
             sb.append("}\n")

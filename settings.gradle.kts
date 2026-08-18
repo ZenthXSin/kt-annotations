@@ -19,3 +19,4 @@ rootProject.name = "kt-annotations"
 include(":annotations")
 include(":tests")
 include(":realmod")
+include(":vanilla")

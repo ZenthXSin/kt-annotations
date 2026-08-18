@@ -60,7 +60,7 @@ class ContentScanner {
             // 第二遍:解析所有类型引用
             result.forEach { c ->
                 c.rawSuperTypes = c.rawSuperTypes.map { r ->
-                    if (r.contains(".")) r else nameToFqn[r] ?: r
+                    if (r.contains(".")) r else nameToFqn[r] ?: knownFqn[r] ?: r
                 }
                 c.superTypes = c.rawSuperTypes
                 c.fields = c.fields.map { f ->
@@ -80,9 +80,92 @@ class ContentScanner {
         return result
     }
 
+    private val knownFqn = mapOf(
+        "Reads" to "arc.util.io.Reads", "Writes" to "arc.util.io.Writes",
+        "Position" to "arc.math.geom.Position", "Vec2" to "arc.math.geom.Vec2",
+        "Rect" to "arc.math.geom.Rect", "Cons" to "arc.func.Cons",
+        "Team" to "mindustry.game.Team", "Building" to "mindustry.gen.Building",
+        "Block" to "mindustry.world.Block", "Tile" to "mindustry.world.Tile",
+        "Floor" to "mindustry.world.blocks.environment.Floor",
+        "CoreBlock" to "mindustry.world.blocks.storage.CoreBlock",
+        "Entityc" to "io.eve.vanilla.gen.Entityc", "Posc" to "io.eve.vanilla.gen.Posc",
+        "Hitboxc" to "io.eve.vanilla.gen.Hitboxc",
+        "EntityCollisions" to "mindustry.entities.EntityCollisions",
+        "SolidPred" to "mindustry.entities.EntityCollisions.SolidPred",
+        "Sized" to "mindustry.entities.Sized",
+        "CoreBuild" to "mindustry.gen.CoreBuild",
+        "Scaled" to "arc.math.Scaled",
+        "FloatBuffer" to "java.nio.FloatBuffer",
+        "QuadTreeObject" to "arc.math.geom.QuadTree.QuadTreeObject",
+        "QuadTree" to "arc.math.geom.QuadTree",
+        "Item" to "mindustry.type.Item",
+        "ItemStack" to "mindustry.type.ItemStack",
+        "Time" to "arc.util.Time", "Mathf" to "arc.math.Mathf",
+        "CoreBuild" to "mindustry.world.blocks.storage.CoreBlock.CoreBuild",
+        "Vec2" to "arc.math.geom.Vec2",
+        "T" to "kotlin.Any",
+        "Color" to "arc.graphics.Color",
+        "TextureRegion" to "arc.graphics.g2d.TextureRegion",
+        "Interval" to "arc.util.Interval",
+        "Effect" to "mindustry.entities.Effect",
+        "Any" to "kotlin.Any",
+        "Bits" to "arc.struct.Bits",
+        "StatusEntry" to "mindustry.entities.units.StatusEntry",
+        "StatusEffect" to "mindustry.type.StatusEffect",
+        "BuildPlan" to "mindustry.entities.units.BuildPlan",
+        "Seq" to "arc.struct.Seq",
+        "Queue" to "arc.struct.Queue",
+        "WeaponMount" to "mindustry.entities.units.WeaponMount",
+        "Array" to "kotlin.Array",
+        "UnitType" to "mindustry.type.UnitType",
+    )
+
+    private fun splitGenericArgs(s: String): List<String> {
+        val parts = mutableListOf<String>()
+        var depth = 0
+        val buf = StringBuilder()
+        for (c in s) {
+            when (c) {
+                '<' -> { depth++; buf.append(c) }
+                '>' -> { depth--; buf.append(c) }
+                ',' -> { if (depth == 0) { parts.add(buf.toString().trim()); buf.clear() } else buf.append(c) }
+                else -> buf.append(c)
+            }
+        }
+        if (buf.isNotEmpty()) parts.add(buf.toString().trim())
+        return parts
+    }
+
     private fun resolveType(type: String, nameToFqn: Map<String, String>): String {
-        if (type.contains(".")) return type
-        return nameToFqn[type.removeSuffix("?")]?.let { fqn -> if (type.endsWith("?")) "$fqn?" else fqn } ?: type
+        if (type.contains(".") && !type.contains("<")) return type
+
+        // 单字母大写 = 泛型参数名,不解析
+        if (type.length == 1 && type[0].isUpperCase()) return type
+
+        val clean = type.removeSuffix("?")
+        val resolved = nameToFqn[clean] ?: knownFqn[clean]
+        if (resolved != null) return if (type.endsWith("?")) "$resolved?" else resolved
+        // 泛型:递归解析每个类型参数(支持嵌套)
+        if (type.contains("<")) {
+            val gi = type.indexOf('<')
+            val base = type.substring(0, gi).trim()
+            // 找到匹配的 > 结尾
+            var depth = 0
+            var ge = -1
+            for (i in type.indices) {
+                when (type[i]) {
+                    '<' -> depth++
+                    '>' -> { depth--; if (depth == 0) { ge = i; break } }
+                }
+            }
+            if (ge >= 0) {
+                val inner = type.substring(gi + 1, ge).trim()
+                val innerResolved = splitGenericArgs(inner).map { resolveType(it.trim(), nameToFqn) }.joinToString(", ")
+                val baseResolved = resolveType(base, nameToFqn)
+                return "$baseResolved<$innerResolved>"
+            }
+        }
+        return type
     }
 
     /** 递归扫描类(含嵌套类)。 */
@@ -129,10 +212,35 @@ class ContentScanner {
         return out
     }
 
+    private fun inferTypeFromInitializer(init: Any?): String? {
+        // 用 PSI 文本推断类型,只处理常见字面量
+        val text = (init as? org.jetbrains.kotlin.psi.KtExpression)?.text ?: return null
+        if (text.endsWith("f") || text.endsWith("F")) return "Float"
+        if (text.endsWith("L")) return "Long"
+        if (text == "true" || text == "false") return "Boolean"
+        if (text.startsWith("\"")) return "String"
+        // 构造器调用: arc.util.Interval(6) -> arc.util.Interval
+        val parenIdx = text.indexOf('(')
+        if (parenIdx >= 0) {
+            val ctor = text.substring(0, parenIdx).trim()
+            // 只取类型部分(不含括号)
+            return ctor
+        }
+        var isNumeric = text.length > 0
+        for (c in text) {
+            if (!(c.isDigit() || c == '-' || c == '.')) { isNumeric = false; break }
+        }
+        if (isNumeric && text.contains(".")) return "Double"
+        if (isNumeric) return "Int"
+        if (text.contains(".")) return text.substringBeforeLast(".")
+        if (text[0].isUpperCase()) return text
+        return null
+    }
+
     private fun parseField(prop: KtProperty): KtField? {
         val name = prop.name ?: return null
         val mods = prop.modifierList
-        val type = prop.typeReference?.text ?: return null
+        val type = prop.typeReference?.text ?: inferTypeFromInitializer(prop.initializer) ?: "Any"
         return KtField(
             name = name,
             type = type,
@@ -152,12 +260,19 @@ class ContentScanner {
         val params = fn.valueParameters.map { p ->
             KtParameter(p.name ?: "arg", p.typeReference?.text ?: "Unit")
         }
+        val bodyText = fn.bodyBlockExpression?.text?.trim()?.let { t -> if (t.isNotEmpty()) t else null }
+            ?: fn.bodyExpression?.text?.trim()?.let { t -> if (t.isNotEmpty()) "{\nreturn $t\n}" else null }
+        val isVoidBody = bodyText == null
+        val isOverride = mods?.hasModifier(org.jetbrains.kotlin.lexer.KtTokens.OVERRIDE_KEYWORD) == true
         return KtMethod(
             name = name,
+            body = bodyText,
             returnType = returnType,
             parameters = params,
             annotations = parseAnnotations(fn),
             isStatic = false,
+            isOverride = isOverride,
+            isVoidBody = isVoidBody,
             isPublic = mods?.hasModifier(KtTokens.PUBLIC_KEYWORD) == true,
             isPrivate = mods?.hasModifier(KtTokens.PRIVATE_KEYWORD) == true,
             isAbstract = mods?.hasModifier(KtTokens.ABSTRACT_KEYWORD) == true,

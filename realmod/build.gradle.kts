@@ -15,6 +15,7 @@ kotlin {
 
 ktAnnotations {
     mindustryMode = true
+    genPackage = "io.eve.ktannot.gen"
 }
 
 dependencies {

@@ -27,6 +27,8 @@ open class GenerateTask : DefaultTask() {
     // 真实 Mindustry 模式:生成对接 mindustry.net.Packet / arc.util.io.Writes / mindustry.world.Block / arc.Core 的代码
     @get:org.gradle.api.tasks.Internal
     var mindustryMode: Boolean = false
+    @get:org.gradle.api.tasks.Internal
+    var genPackage: String = "io.eve.ktannot.gen"
 
     @TaskAction
     fun run() {
@@ -39,7 +41,7 @@ open class GenerateTask : DefaultTask() {
         logger.lifecycle("[kt-annot] found ${classes.size} classes")
 
         // 运行全部注解处理器(对标 Mindustry 6 大处理器)
-        EntityGenerator.generate(classes, out, mindustryMode)   // @EntityDef / @Component / @GroupDef
+        EntityGenerator.GEN_PKG = genPackage; EntityGenerator.generate(classes, out, mindustryMode)   // @EntityDef / @Component / @GroupDef
         StructGenerator.generate(classes, out)                  // @Struct
         RegionGenerator.generate(classes, out, mindustryMode)          // @Load
         RemoteGenerator.generate(classes, out, mindustryMode)   // @Remote
@@ -66,7 +68,7 @@ class KtAnnotationsPlugin : Plugin<Project> {
         target.afterEvaluate {
             val ext = target.extensions.findByName("ktAnnotations") as? KtAnnotationsExtension
             if (ext != null) {
-                taskProvider.configure { mindustryMode = ext.mindustryMode }
+                taskProvider.configure { mindustryMode = ext.mindustryMode; genPackage = ext.genPackage }
             }
         }
 
@@ -101,4 +103,5 @@ open class KtAnnotationsExtension {
     var sourceDir: String = "src/main/kotlin"
     var outputDir: String = "build/generated/ktannot/main/kotlin"
     var mindustryMode: Boolean = false
+    var genPackage: String = "io.eve.ktannot.gen"
 }

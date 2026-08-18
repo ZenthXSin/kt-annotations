@@ -33,6 +33,7 @@ data class KtField(
 
 /** 成员函数 */
 data class KtMethod(
+    val body: String? = null,
     val name: String,
     val returnType: String, // 完整字符串,如 "kotlin.Int" / "kotlin.Unit"
     val parameters: List<KtParameter>,
@@ -41,6 +42,8 @@ data class KtMethod(
     val isPublic: Boolean = false,
     val isPrivate: Boolean = false,
     val isAbstract: Boolean = false,
+    val isOverride: Boolean = false,
+    val isVoidBody: Boolean = false,
 )
 
 /** 函数参数 */

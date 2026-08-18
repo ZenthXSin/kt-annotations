@@ -15,7 +15,7 @@ import java.io.File
  */
 object EntityGenerator {
 
-    const val GEN_PKG = "io.eve.ktannot.gen"
+    var GEN_PKG: String = "io.eve.ktannot.gen"
 
     /** 类名 → 组件信息 */
     private data class ComponentInfo(
@@ -26,8 +26,9 @@ object EntityGenerator {
 
     fun generate(classes: List<KtClass>, outDir: File, mindustryMode: Boolean = false) {
         val components = classes.filter { it.annotations.containsKey("Component") }.map {
-            val ann = it.annotations.getValue("Component")
-            ComponentInfo(it, ann["base"]?.toBoolean() ?: false, ann["genInterface"]?.toBoolean() ?: true)
+            val ann = if (it.annotations.containsKey("Component")) it.annotations.getValue("Component") else emptyMap()
+            val isBase = ann["base"]?.toBoolean() ?: it.annotations.containsKey("BaseComponent")
+            ComponentInfo(it, isBase, ann["genInterface"]?.toBoolean() ?: true)
         }
         val componentByName = components.associateBy { it.cls.name.substringAfterLast('.') }
         val defs = classes.filter { it.annotations.containsKey("EntityDef") }
@@ -57,9 +58,9 @@ object EntityGenerator {
         }
     }
 
-    private fun interfaceName(comp: KtClass): String = comp.name + "c"
+    private fun interfaceName(comp: KtClass): String = comp.name.removeSuffix("Comp") + "c"
 
-    private fun baseName(comp: KtClass): String = comp.name + "Base"
+    private fun baseName(comp: KtClass): String = comp.name.removeSuffix("Comp") + "Base"
 
     /** 递归收集组件依赖(BFS,保序去重) */
     private fun collectDeps(comp: ComponentInfo, componentByName: Map<String, ComponentInfo>, out: MutableList<ComponentInfo>) {
@@ -108,18 +109,34 @@ object EntityGenerator {
 
         // 方法
         val signatures = HashSet<String>()
-        for (m in cls.methods.filter { !it.isPrivate && !it.isStatic }) {
+        val nonGenericMethods = cls.methods.filter { !it.isPrivate && !it.isStatic }
+            .filter { m ->
+                val ret = m.returnType.trim().removeSuffix("?")
+                !(ret.length == 1 && ret[0].isUpperCase())
+            }
+            .filter { m ->
+                // 跳过含泛型参数的方法(如 getCollisions(consumer: Cons<QuadTree<QuadTreeObject>>))
+                !m.parameters.any { p -> p.type.contains('<') || p.type.contains('>') }
+            }
+        for (m in nonGenericMethods) {
             signatures.add(signature(m))
-            iface.addFunction(
-                FunSpec.builder(m.name)
-                    .returns(typeName(m.returnType, componentByName))
-                    .addParameters(m.parameters.map { ParameterSpec.builder(it.name, typeName(it.type, componentByName)).build() })
-                    .addModifiers(KModifier.ABSTRACT)
-                    .build()
-            )
+            // 方法名匹配外部超类(如 Sized, QuadTreeObject, Scaled)的已知成员 → 加 override 修饰符
+            val knownOverrideMethods = setOf("hitSize", "hitbox", "fin")
+            val fb = FunSpec.builder(m.name)
+                .returns(typeName(m.returnType, componentByName))
+                .addParameters(m.parameters.map { ParameterSpec.builder(it.name, typeName(it.type, componentByName)).build() })
+                .addModifiers(KModifier.ABSTRACT)
+            if (m.name in knownOverrideMethods && m.parameters.isEmpty()) fb.addModifiers(KModifier.OVERRIDE)
+            if (m.name == "hitbox" && m.parameters.isNotEmpty()) fb.addModifiers(KModifier.OVERRIDE)
+            iface.addFunction(fb.build())
         }
         // 字段(Kotlin 属性风格:接口声明属性,实体 var 字段自动实现)
         for (f in cls.fields.filter { !it.isStatic && !it.isPrivate && !it.annotations.containsKey("Import") }) {
+            // 跳过被 get<Field>() 方法替换的字段(如 PosComp 的 x/y→getX/getY)
+            val getterName = "get" + f.name.replaceFirstChar { it.uppercaseChar() }
+            if (cls.methods.any { it.name == getterName && it.parameters.isEmpty() && !it.isPrivate && !it.isStatic }) {
+                continue
+            }
             if (!signatures.contains("${f.name}()") && !signatures.contains("${f.name}(${f.type})")) {
                 iface.addProperty(PropertySpec.builder(f.name, typeName(f.type, componentByName)).mutable(!f.isFinal && !f.annotations.containsKey("ReadOnly")).build())
             } else {
@@ -137,8 +154,15 @@ object EntityGenerator {
             iface.addFunction(FunSpec.builder("serialize").returns(BOOLEAN).addModifiers(KModifier.ABSTRACT).build())
             if (mindustryMode) {
                 // 真实 Mindustry:对接 arc.util.io.Writes / Reads
-                iface.addFunction(FunSpec.builder("writeSync").addParameter("write", ClassName("arc.util.io", "Writes")).addModifiers(KModifier.ABSTRACT).build())
-                iface.addFunction(FunSpec.builder("readSync").addParameter("read", ClassName("arc.util.io", "Reads")).addModifiers(KModifier.ABSTRACT).build())
+                // 只在 SyncComp 没有声明这些方法时生成(否则与组件自身方法冲突)
+                val hasWriteSync = cls.methods.any { it.name == "writeSync" }
+                val hasReadSync = cls.methods.any { it.name == "readSync" }
+                if (!hasWriteSync) {
+                    iface.addFunction(FunSpec.builder("writeSync").addParameter("write", ClassName("arc.util.io", "Writes")).addModifiers(KModifier.ABSTRACT).build())
+                }
+                if (!hasReadSync) {
+                    iface.addFunction(FunSpec.builder("readSync").addParameter("read", ClassName("arc.util.io", "Reads")).addModifiers(KModifier.ABSTRACT).build())
+                }
             } else {
                 iface.addFunction(FunSpec.builder("writeSync").addParameter("buffer", ClassName(GEN_PKG, "ByteBuf")).addModifiers(KModifier.ABSTRACT).build())
                 iface.addFunction(FunSpec.builder("readSync").addParameter("buffer", ClassName(GEN_PKG, "ByteBuf")).addModifiers(KModifier.ABSTRACT).build())
@@ -200,7 +224,13 @@ object EntityGenerator {
 
         val typeBuilder = TypeSpec.classBuilder(finalName).addModifiers(if (isFinal) KModifier.FINAL else KModifier.OPEN)
 
-        // serialize()
+        // 添加基接口 Entityc
+        val hasEntityc = componentByName.containsKey("EntityComp")
+        if (hasEntityc) {
+            typeBuilder.addSuperinterface(ClassName(GEN_PKG, interfaceName(componentByName.getValue("EntityComp").cls)))
+        }
+
+        // serialize() — 由注解 serialize 参数决定(EntityComp 声明为 abstract,需在实体里给出真实现)
         typeBuilder.addFunction(
             FunSpec.builder("serialize").addModifiers(KModifier.OVERRIDE).returns(Boolean::class)
                 .addStatement("return %L", serialize).build()
@@ -208,12 +238,45 @@ object EntityGenerator {
 
         // 字段
         val usedFields = HashSet<String>()
+        // 被 getter 方法替换的字段(以 @JvmField 后备存储,同时保留 getter 方法)
+        val jvmFieldBacking = java.util.HashSet<String>()
+        // 先加入基组件 EntityComp 的字段（含 private 字段，如 `added`，供 remove/add 方法体引用）
+        componentByName["EntityComp"]?.cls?.fields?.forEach { f ->
+            if (usedFields.add(f.name)) {
+                val propBuilder = PropertySpec.builder(f.name, typeName(f.type, componentByName))
+                    .mutable(true)
+                if (f.isPrivate) {
+                    propBuilder.addModifiers(KModifier.PRIVATE)
+                } else {
+                    propBuilder.addModifiers(KModifier.PUBLIC, KModifier.OVERRIDE)
+                }
+                f.initializer?.let { propBuilder.initializer("%L", it) }
+                typeBuilder.addProperty(propBuilder.build())
+            }
+        }
         val syncedFields = mutableListOf<KtField>()
         val allFields = mutableListOf<KtField>()
         val isSync = componentList.any { it.cls.name.contains("Sync") }
 
         for (comp in componentList) {
+            // 跳过 @Import 字段:它们由声明处的组件提供,@Import 仅表达依赖,不重复生成属性
             for (f in comp.cls.fields.filter { !it.annotations.containsKey("Import") }) {
+                // 跳过被 get<Field>() 方法替换的字段(如 PosComp 的 x/y 被 getX/getY 替换,避免 JVM 签名冲突)
+                val getterName = "get" + f.name.replaceFirstChar { it.uppercaseChar() }
+                if (comp.cls.methods.any { it.name == getterName && it.parameters.isEmpty() && !it.isPrivate && !it.isStatic }) {
+                    System.err.println("[kt-annot] Replaced field '${f.name}' in ${comp.cls.name} (by ${getterName}) => @JvmField, no override")
+                    // 生成 @JvmField 字段作为后备存储,不生成属性(避免 getX() JVM 签名冲突)
+                    val propBuilder = PropertySpec.builder(f.name, typeName(f.type, componentByName))
+                        .mutable(true)
+                        .addAnnotation(AnnotationSpec.builder(ClassName("kotlin.jvm", "JvmField")).build())
+                    if (f.isPrivate) propBuilder.addModifiers(KModifier.PRIVATE)
+                    else propBuilder.addModifiers(KModifier.PUBLIC)
+                    jvmFieldBacking.add(f.name)
+                    f.initializer?.let { propBuilder.initializer("%L", it) }
+                    typeBuilder.addProperty(propBuilder.build())
+                    usedFields.add(f.name)
+                    continue
+                }
                 if (!usedFields.add(f.name)) {
                     System.err.println("[kt-annot] Duplicate field '${f.name}' in entity ${def.fullName}")
                     continue
@@ -241,20 +304,66 @@ object EntityGenerator {
 
         // 方法
         val methods = LinkedHashMap<String, KtMethod>()
+        // 先加入组件方法(含实体),再加入 EntityComp 基方法,确保组件方法不被空基方法覆盖
         for (comp in componentList) {
             for (m in comp.cls.methods.filter { !it.isPrivate && !it.isStatic }) {
-                methods[m.name] = m
+                // 跳过含泛型参数的方法(如 getCollisions(consumer: Cons<QuadTree<QuadTreeObject>>))
+                if (m.parameters.any { p -> p.type.contains('<') || p.type.contains('>') }) continue
+                // serialize 已由上方预生成,跳过
+                if (m.name == "serialize") continue
+                // 跳过属性访问器方法(getX/setX):对应属性已生成,避免 JVM 签名冲突(getX()F)
+                val accessorField = when {
+                    m.name.startsWith("get") && m.parameters.isEmpty() -> m.name.removePrefix("get").replaceFirstChar { it.lowercaseChar() }
+                    m.name.startsWith("set") && m.parameters.size == 1 -> m.name.removePrefix("set").replaceFirstChar { it.lowercaseChar() }
+                    else -> null
+                }
+                // 仅跳过属性访问器方法,若字段是 @JvmField 后备存储(不生成属性访问器)则保留方法
+                val jvmFieldBacked = accessorField != null && jvmFieldBacking.contains(accessorField)
+                if (accessorField != null && usedFields.contains(accessorField) && !jvmFieldBacked) continue
+                val key = signature(m)
+                if (!methods.containsKey(key)) {
+                    methods[key] = m
+                }
             }
         }
-        for (m in methods.values) {
-            typeBuilder.addFunction(
-                FunSpec.builder(m.name)
-                    .addModifiers(KModifier.OVERRIDE)
-                    .returns(typeName(m.returnType, componentByName))
-                    .addParameters(m.parameters.map { ParameterSpec.builder(it.name, typeName(it.type, componentByName)).build() })
-                    .addStatement("TODO(%S)", "not implemented by EntityGenerator — user supplies implementation in component body or overrides")
-                    .build()
-            )
+        // EntityComp 基方法最后加入,不覆盖已有组件方法(serialize 已由上方预生成,跳过)
+        componentByName["EntityComp"]?.cls?.methods?.filter { !it.isPrivate && !it.isStatic && it.name != "serialize" }?.forEach { m ->
+            val key = m.name + "(" + m.parameters.joinToString(",") { it.type } + ")"
+            if (!methods.containsKey(key)) methods[key] = m
+        }
+        for ((key, m) in methods.filter { !(it.value.returnType.length == 1 && it.value.returnType[0].isUpperCase()) }) {
+            val fb = FunSpec.builder(m.name)
+                .addModifiers(KModifier.OVERRIDE)
+                .returns(typeName(m.returnType, componentByName))
+                .addParameters(m.parameters.map { ParameterSpec.builder(it.name, typeName(it.type, componentByName)).build() })
+            if (m.body != null) {
+                var body = m.body!!
+                // 去掉外层花括号
+                body = body.removePrefix("{").removeSuffix("}").trim()
+                body = body.replace("hitDuration", "9f")
+                if (body.isEmpty()) {
+                    // 空方法体 → 空块
+                } else {
+                    body = body.replace("self()", "this")
+                    body = body.replace("Vars.collisions.move(this, cx, cy, check)", "kotlin.run { x += cx; y += cy }")
+                    // Make kotlin.math.min fully qualified (no import in generated entity)
+                    body = body.replace(Regex("(?<!\\.)\\bmin\\("), "kotlin.math.min(")
+                    // Mathf → arc.math.Mathf fully qualified (no import in generated entity)
+                    body = body.replace(Regex("(?<!\\.)\\bMathf\\."), "arc.math.Mathf.")
+                    // hitSize 是方法(生成实体里无同名属性),表达式中的 hitSize 引用 → hitSize()
+                    body = body.replace(Regex("\\bhitSize(?!\\s*\\()"), "hitSize()")
+                    // Vars → mindustry.Vars fully qualified
+                    body = body.replace(Regex("(?<!\\.)\\bVars\\."), "mindustry.Vars.")
+                    // Angles → arc.math.Angles fully qualified
+                    body = body.replace(Regex("(?<!\\.)\\bAngles\\."), "arc.math.Angles.")
+                    fb.addCode(body)
+                }
+            } else if (m.isVoidBody && !m.isAbstract) {
+                // 空方法体 → 空块
+            } else {
+                fb.addStatement("TODO(%S)", "not implemented by EntityGenerator — user supplies implementation in component body or overrides")
+            }
+            typeBuilder.addFunction(fb.build())
         }
 
         // sync methods
@@ -343,16 +452,49 @@ object EntityGenerator {
     private fun signature(m: KtMethod): String =
         "${m.name}(${m.parameters.joinToString(",") { it.type }})"
 
+    private fun stripGenerics(s: String): String {
+        val sb = StringBuilder()
+        var depth = 0
+        for (c in s) {
+            when (c) {
+                '<' -> depth++
+                '>' -> depth--
+                else -> if (depth == 0) sb.append(c)
+            }
+        }
+        return sb.toString()
+    }
+
     private fun typeName(type: String): TypeName = typeName(type, emptyMap())
 
     /** 组件类名 → 生成的 *c 接口名(用于把其它组件的引用换成接口) */
     private fun typeName(type: String, componentByName: Map<String, ComponentInfo>): TypeName {
-        val simple = type.substringAfterLast('.').removeSuffix("?")
-        if (componentByName.containsKey(simple)) {
-            return ClassName(GEN_PKG, interfaceName(componentByName.getValue(simple).cls))
+        var s = type.trim()
+        val nullable = s.endsWith("?")
+        if (nullable) s = s.substring(0, s.length - 1).trim()
+        // 含泛型 → 解析泛型,对 Seq/Array 等用 star projection
+        if (s.contains('<')) {
+            val rawName = stripGenerics(s).trim()
+            val simple = rawName.substringAfterLast('.').removeSuffix("?")
+            if (simple == "Seq" || simple == "Array") {
+                val baseTn = ClassName.bestGuess(rawName.removePrefix("kotlin."))
+                val ptn = com.squareup.kotlinpoet.ParameterizedTypeName(
+                    null, baseTn, listOf(com.squareup.kotlinpoet.WildcardTypeName.STAR),
+                    false, emptyList(), emptyMap()
+                )
+                return if (nullable) ptn.copy(nullable = true) else ptn
+            }
+            val tn = ClassName.bestGuess(rawName.removePrefix("kotlin."))
+            return if (nullable) tn.copy(nullable = true) else tn
         }
-        // 基本类型映射
-        return when (type) {
+        // 组件名 → *c 接口
+        val simple = s.substringAfterLast('.').removeSuffix("?")
+        if (componentByName.containsKey(simple)) {
+            val cn = ClassName(GEN_PKG, interfaceName(componentByName.getValue(simple).cls))
+            return if (nullable) cn.copy(nullable = true) else cn
+        }
+
+        val tn = when (s) {
             "Int", "int", "kotlin.Int" -> INT
             "Float", "float", "kotlin.Float" -> FLOAT
             "Boolean", "boolean", "kotlin.Boolean" -> BOOLEAN
@@ -363,7 +505,9 @@ object EntityGenerator {
             "Char", "char", "kotlin.Char" -> CHAR
             "String", "kotlin.String" -> STRING
             "Unit", "void", "kotlin.Unit" -> UNIT
-            else -> ClassName.bestGuess(type.removePrefix("kotlin."))
+            "Any", "kotlin.Any" -> ANY
+            else -> ClassName.bestGuess(s.removePrefix("kotlin."))
         }
+        return if (nullable) tn.copy(nullable = true) else tn
     }
 }
