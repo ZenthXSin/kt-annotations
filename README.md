@@ -5,7 +5,7 @@
 
 - 处理方式：Gradle 插件内嵌 **Kotlin PSI** 扫描器 + **KotlinPoet** 代码生成器，不依赖 javac/kapt，无需注解处理器的 JVM 配置
 - 两种模式：`mindustryMode=true` 生成对接真实引擎的代码；`false` 生成对接内置桩的独立可运行代码（便于纯 JVM 单测）
-- 版本：插件 `io.eve.ktannot` / 注解库 `io.eve.ktannot:annotations`，`0.1.0`
+- 版本：插件 `io.eve.ktannot` / 注解库 `io.eve.ktannot:annotations`，`v159.7.0`
 
 ---
 
@@ -94,9 +94,9 @@ mod jar
 
 | 坐标 | 内容 |
 |---|---|
-| `io.eve.ktannot:buildSrc:0.1.0` | 插件实现 |
-| `io.eve.ktannot:io.eve.ktannot.gradle.plugin:0.1.0` | 插件 marker |
-| `io.eve.ktannot:annotations:0.1.0` | 注解库（运行时依赖） |
+| `io.eve.ktannot:buildSrc:v159.7.0` | 插件实现 |
+| `io.eve.ktannot:io.eve.ktannot.gradle.plugin:v159.7.0` | 插件 marker |
+| `io.eve.ktannot:annotations:v159.7.0` | 注解库（运行时依赖） |
 
 ### 3.2 在消费项目接入
 
@@ -118,7 +118,7 @@ pluginManagement {
 ```kotlin
 plugins {
     kotlin("jvm") version "2.2.0"
-    id("io.eve.ktannot") version "0.1.0"
+    id("io.eve.ktannot") version "v159.7.0"
 }
 
 ktAnnotations {
@@ -127,7 +127,7 @@ ktAnnotations {
 }
 
 dependencies {
-    implementation("io.eve.ktannot:annotations:0.1.0")
+    implementation("io.eve.ktannot:annotations:v159.7.0")
     // 真实 mod 还需要引擎依赖（见实战篇）
 }
 
@@ -552,7 +552,7 @@ ktAnnotations { mindustryMode = true; genPackage = "io.eve.ktannot.gen" }
 dependencies {
     implementation("com.github.Anuken.Mindustry:core:v159.7")   // 引擎核心
     implementation("com.github.Anuken.Arc:arc-core:208a754044") // arc（core 传递依赖同 commit）
-    implementation("io.eve.ktannot:annotations:0.1.0")
+    implementation("io.eve.ktannot:annotations:v159.7.0")
 }
 sourceSets { main { kotlin.srcDir("src/main/kotlin"); kotlin.srcDir("build/generated/ktannot/main/kotlin") } }
 ```
@@ -760,7 +760,7 @@ kt-annotations/
 ## 十二、FAQ
 
 **Q：插件解析不到 `io.eve.ktannot`？**
-A：先执行 `./gradlew :annotations:publishToMavenLocal :buildSrc:publishToMavenLocal`，并在消费项目 `settings.gradle.kts` 的 `pluginManagement.repositories` 加 `mavenLocal()`；`plugins` 块带版本 `id("io.eve.ktannot") version "0.1.0"`。
+A：先执行 `./gradlew :annotations:publishToMavenLocal :buildSrc:publishToMavenLocal`，并在消费项目 `settings.gradle.kts` 的 `pluginManagement.repositories` 加 `mavenLocal()`；`plugins` 块带版本 `id("io.eve.ktannot") version "v159.7.0"`。
 
 **Q：生成代码没出现 / 目录为空？**
 A：检查 ① `ktAnnotations.sourceDir` 是否指向真实源码目录（默认 `src/main/kotlin`）；② `build` 是否依赖 `generateKtAnnotations`；③ 生成目录是否已加入 `kotlin.srcDir`。
