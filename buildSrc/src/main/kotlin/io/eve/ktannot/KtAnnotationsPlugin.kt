@@ -56,44 +56,40 @@ class KtAnnotationsPlugin : Plugin<Project> {
         target.extensions.create("ktAnnotations", KtAnnotationsExtension::class.java)
 
         val taskProvider = target.tasks.register("generateKtAnnotations", GenerateTask::class.java)
-        val task = taskProvider
-        taskProvider.configure {
-            group = "kt-annotations"
-            description = "Generate Mindustry-style annotations code (entities, structs, regions, remote, logic, assets)"
-            sourceDir.set(File(target.projectDir, "src/main/kotlin"))
-            outputDir.set(File(target.buildDir, "generated/ktannot/main/kotlin"))
+        taskProvider.configure { t ->
+            t.group = "kt-annotations"
+            t.description = "Generate Mindustry-style annotations code (entities, structs, regions, remote, logic, assets)"
+            t.sourceDir.set(File(target.projectDir, "src/main/kotlin"))
+            t.outputDir.set(File(target.buildDir, "generated/ktannot/main/kotlin"))
         }
 
-        // 传递 mindustryMode:extensions.ktAnnotations.mindustryMode → 任务属性
+        // 传递 extension 配置到任务属性
         target.afterEvaluate {
             val ext = target.extensions.findByName("ktAnnotations") as? KtAnnotationsExtension
             if (ext != null) {
-                taskProvider.configure { mindustryMode = ext.mindustryMode; genPackage = ext.genPackage }
-            }
-        }
-
-        target.afterEvaluate {
-            // 将生成目录追加到 main source set,并让 compileKotlin 依赖生成任务
-            // buildSrc 无法直接引用 SourceSetContainer/KotlinSourceSet(位于 gradle 插件类别 jar),
-            // 因此用无类型扩展 + 反射访问,保持可编译。
-            val generated = File(target.buildDir, "generated/ktannot/main/kotlin")
-            runCatching {
-                val srcSets = target.extensions.findByName("sourceSets") ?: return@runCatching
-                val main: Any = srcSets.javaClass.getMethod("getByName", String::class.java).invoke(srcSets, "main")
-                val java: Any = main.javaClass.getMethod("getJava").invoke(main)
-                java.javaClass.getMethod("srcDir", Any::class.java).invoke(java, generated)
-                val ext = main.javaClass.getMethod("getExtensions").invoke(main)
-                val kts = ext.javaClass.getMethod("findByName", String::class.java).invoke(ext, "kotlin")
-                if (kts != null) {
-                    val kk = kts.javaClass.getMethod("getKotlin").invoke(kts)
-                    kk.javaClass.getMethod("srcDir", Any::class.java).invoke(kk, generated)
+                val outputPath = target.file(ext.outputDir)
+                taskProvider.configure { t2 ->
+                    t2.mindustryMode = ext.mindustryMode
+                    t2.genPackage = ext.genPackage
+                    t2.sourceDir.set(target.file(ext.sourceDir))
+                    t2.outputDir.set(outputPath)
                 }
-            }.onFailure { e ->
-                target.logger.warn("[kt-annot] failed to wire generated source dir: ${e.message}")
-            }
-            val compileTask = target.tasks.findByName("compileKotlin")
-            if (compileTask != null) {
-                compileTask.dependsOn(task)
+
+                // 将生成目录追加到 main source set,并让 compileKotlin 依赖生成任务
+                // Use SourceSetContainer to add generated source dirs.
+                // 注: Kotlin 源目录由各消费模块自己的 build.gradle.kts 统一声明
+                // (kotlin.srcDir("build/generated/ktannot/main/kotlin")),生成器插件只需
+                // 把 Java 源目录加上并让 compileKotlin 依赖生成任务即可,避免在插件内
+                // 直接引用 KGP 的 KotlinSourceSet 类型(standalone plugin 编译期不可用)。
+                val srcSets = target.extensions.findByType(org.gradle.api.tasks.SourceSetContainer::class.java)
+                if (srcSets != null) {
+                    val main = srcSets.getByName("main")
+                    main.java.srcDir(outputPath)
+                }
+                val compileTask = target.tasks.findByName("compileKotlin")
+                if (compileTask != null) {
+                    compileTask.dependsOn(taskProvider.flatMap { it.outputDir })
+                }
             }
         }
     }

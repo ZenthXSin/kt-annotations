@@ -1,7 +1,7 @@
 plugins {
-    `kotlin-dsl`
     `java-gradle-plugin`
     `maven-publish`
+    kotlin("jvm") version "2.2.0"
 }
 
 repositories {
@@ -10,9 +10,10 @@ repositories {
 }
 
 dependencies {
-    implementation("org.jetbrains.kotlin:kotlin-compiler-embeddable:2.0.21")
+    implementation(gradleApi())
+    implementation("org.jetbrains.kotlin:kotlin-compiler-embeddable:2.2.0")
     implementation("com.squareup:kotlinpoet-jvm:1.17.0")
-    implementation(kotlin("stdlib"))
+    implementation(kotlin("stdlib", "2.2.0"))
 }
 
 group = "io.eve.ktannot"
