@@ -79,4 +79,29 @@ public class TypeUtils {
             ClassName.bestGuess("java.lang.String")
         );
     }
+
+    /** 解析类型字符串的顶层泛型参数(支持嵌套,如 ThreadLocal<Seq<Transform>> → [Seq<Transform>])。 */
+    public static java.util.List<String> parseGenericArgs(String type) {
+        java.util.List<String> parts = new java.util.ArrayList<>();
+        int gi = type.indexOf('<');
+        if (gi < 0) return parts;
+        int depth = 0;
+        StringBuilder buf = new StringBuilder();
+        for (int i = gi + 1; i < type.length(); i++) {
+            char c = type.charAt(i);
+            if (c == '<') depth++;
+            if (c == '>') {
+                if (depth == 0) break;
+                depth--;
+            }
+            if (c == ',' && depth == 0) {
+                parts.add(buf.toString().trim());
+                buf.setLength(0);
+            } else {
+                buf.append(c);
+            }
+        }
+        if (buf.length() > 0) parts.add(buf.toString().trim());
+        return parts;
+    }
 }

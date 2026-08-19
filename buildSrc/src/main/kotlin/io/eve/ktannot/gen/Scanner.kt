@@ -135,6 +135,7 @@ class ContentScanner {
         "Mover" to "mindustry.entities.Mover",
         "Layer" to "mindustry.graphics.Layer",
         "Runnable" to "java.lang.Runnable",
+        "ThreadLocal" to "java.lang.ThreadLocal",
         "Payload" to "mindustry.world.blocks.payloads.Payload",
         "BuildPayload" to "mindustry.world.blocks.payloads.BuildPayload",
         "UnitPayload" to "mindustry.world.blocks.payloads.UnitPayload",

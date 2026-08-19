@@ -646,8 +646,13 @@ object EntityGenerator {
                 val ptn = io.eve.ktannot.gen.TypeUtils.seqStar()
                 return if (nullable) ptn.copy(nullable = true) else ptn
             }
-            val tn = ClassName.bestGuess(rawName.removePrefix("kotlin."))
-            return if (nullable) tn.copy(nullable = true) else tn
+            // 非特殊类型：解析泛型参数并构造 ParameterizedTypeName
+            val baseTn = ClassName.bestGuess(rawName.removePrefix("kotlin."))
+            val innerTypes = io.eve.ktannot.gen.TypeUtils.parseGenericArgs(s)
+                .map { typeName(it, componentByName) }
+                .toTypedArray()
+            val ptn = io.eve.ktannot.gen.TypeUtils.parameterizedType(baseTn, *innerTypes)
+            return if (nullable) ptn.copy(nullable = true) else ptn
         }
         // 组件名 → *c 接口
         val simple = s.substringAfterLast('.').removeSuffix("?")
