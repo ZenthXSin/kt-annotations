@@ -32,6 +32,9 @@ class ContentScanner {
         val configuration = CompilerConfiguration()
         val disposable = Disposer.newDisposable()
         val result = mutableListOf<KtClass>()
+        // 全局 import → FQN 映射:从所有文件中收集 import 声明,
+        // 作为类型解析的最高优先级来源(替代 hardcoded knownFqn)。
+        val importNameToFqn = mutableMapOf<String, String>()
         try {
             val environment = KotlinCoreEnvironment.createForProduction(
                 disposable, configuration, EnvironmentConfigFiles.JVM_CONFIG_FILES
@@ -42,6 +45,12 @@ class ContentScanner {
                     val text = file.readText()
                     val ktFile = psiFactory.createFileFromText(file.name, org.jetbrains.kotlin.idea.KotlinFileType.INSTANCE, text) as KtFile
                     val pkg = ktFile.packageDirective?.qualifiedName ?: ""
+                    // 收集此文件的 import 声明(star import 无法映射单独名字,跳过)
+                    for (importDir in ktFile.importDirectives) {
+                        val importedPath = importDir.importedFqName?.asString() ?: continue
+                        if (importDir.isAllUnder) continue
+                        importNameToFqn[importedPath.substringAfterLast('.')] = importedPath
+                    }
                     ktFile.declarations.forEach { decl ->
                         when (decl) {
                             is PsiKtClass -> result.addAll(scanClass(decl, pkg))
@@ -57,19 +66,19 @@ class ContentScanner {
             val nameToFqn = mutableMapOf<String, String>()
             for (c in result) nameToFqn[c.name] = c.fullName
 
-            // 第二遍:解析所有类型引用
+            // 第二遍:解析所有类型引用(优先级: import 映射 > 扫描到的类 > knownFqn 表 > 原样)
             result.forEach { c ->
                 c.rawSuperTypes = c.rawSuperTypes.map { r ->
-                    if (r.contains(".")) r else nameToFqn[r] ?: knownFqn[r] ?: r
+                    if (r.contains(".")) r else importNameToFqn[r] ?: nameToFqn[r] ?: knownFqn[r] ?: r
                 }
                 c.superTypes = c.rawSuperTypes
                 c.fields = c.fields.map { f ->
-                    f.copy(type = resolveType(f.type, nameToFqn))
+                    f.copy(type = resolveType(f.type, importNameToFqn, nameToFqn))
                 }
                 c.methods = c.methods.map { m ->
                     m.copy(
-                        returnType = resolveType(m.returnType, nameToFqn),
-                        parameters = m.parameters.map { p -> p.copy(type = resolveType(p.type, nameToFqn)) }
+                        returnType = resolveType(m.returnType, importNameToFqn, nameToFqn),
+                        parameters = m.parameters.map { p -> p.copy(type = resolveType(p.type, importNameToFqn, nameToFqn)) }
                     )
                 }
             }
@@ -169,14 +178,14 @@ class ContentScanner {
         return parts
     }
 
-    private fun resolveType(type: String, nameToFqn: Map<String, String>): String {
+    private fun resolveType(type: String, importNameToFqn: Map<String, String>, nameToFqn: Map<String, String>): String {
         if (type.contains(".") && !type.contains("<")) return type
 
         // 单字母大写 = 泛型参数名,不解析
         if (type.length == 1 && type[0].isUpperCase()) return type
 
         val clean = type.removeSuffix("?")
-        val resolved = nameToFqn[clean] ?: knownFqn[clean]
+        val resolved = importNameToFqn[clean] ?: nameToFqn[clean] ?: knownFqn[clean]
         if (resolved != null) return if (type.endsWith("?")) "$resolved?" else resolved
         // 泛型:递归解析每个类型参数(支持嵌套)
         if (type.contains("<")) {
@@ -193,8 +202,8 @@ class ContentScanner {
             }
             if (ge >= 0) {
                 val inner = type.substring(gi + 1, ge).trim()
-                val innerResolved = splitGenericArgs(inner).map { resolveType(it.trim(), nameToFqn) }.joinToString(", ")
-                val baseResolved = resolveType(base, nameToFqn)
+                val innerResolved = splitGenericArgs(inner).map { resolveType(it.trim(), importNameToFqn, nameToFqn) }.joinToString(", ")
+                val baseResolved = resolveType(base, importNameToFqn, nameToFqn)
                 return "$baseResolved<$innerResolved>"
             }
         }
