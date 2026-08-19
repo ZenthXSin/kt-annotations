@@ -100,3 +100,81 @@ object GenAccess {
         io.eve.ktannot.gen.ContentRegions.loadRegions(content)
     }
 }
+
+// ============ 实体基组件(提供 add/remove/isAdded 等生命周期,使生成实体有 Entityc 接口) ============
+@Component
+@io.eve.ktannot.BaseComponent
+abstract class EntityComp {
+    @kotlin.jvm.Transient private var added = false
+    @kotlin.jvm.Transient var id: Int = mindustry.entities.EntityGroup.nextId()
+
+    fun isAdded(): Boolean = added
+    open fun update() {}
+    open fun remove() { added = false }
+    open fun add() { added = true }
+    fun isLocal(): Boolean = (this as? Any) === (mindustry.Vars.player as? Any)
+    fun isRemote(): Boolean = false
+    @Suppress("UNCHECKED_CAST")
+    fun <T : mindustry.gen.Entityc> self(): T = this as T
+    @Suppress("UNCHECKED_CAST")
+    fun <T> `as`(): T = this as T
+
+    @io.eve.ktannot.InternalImpl
+    abstract fun classId(): Int
+
+    @io.eve.ktannot.InternalImpl
+    abstract fun serialize(): Boolean
+
+    @io.eve.ktannot.MethodPriority(1f)
+    open fun read(reads: arc.util.io.Reads) { afterRead() }
+    open fun write(writes: arc.util.io.Writes) {}
+    open fun beforeWrite() {}
+    open fun afterRead() {}
+    open fun afterReadAll() {}
+}
+
+// ============ 完整单位组件(自包含,不依赖@Import,entity生成器可直接生成所有字段) ============
+@Component
+abstract class MyUnitComp : io.eve.ktannot.gen.Entityc {
+    var x = 0f
+    var y = 0f
+    var health = 0f
+    var maxHealth = 1f
+    var dead = false
+    var team = mindustry.game.Team.derelict
+    var rotation = 0f
+    var vel = arc.math.geom.Vec2()
+    var hitSize = 0f
+    var type: mindustry.type.UnitType = mindustry.content.UnitTypes.alpha
+    var controller: mindustry.entities.units.UnitController? = null
+    var isPlayer = false
+    var elevation = 0f
+    var spawner: mindustry.gen.Entityc? = null
+    var mineTile: mindustry.world.Tile? = null
+    var mounted = false
+    var flag = 0.0
+    var abilities: arc.struct.Seq<*> = arc.struct.Seq<Any?>()
+    var ammo = 0f
+    var ammoCapacity = 0f
+
+    fun isFlying(): Boolean = elevation >= 0.09f
+    fun isGrounded(): Boolean = elevation < 0.001f
+}
+
+// ============ 完整单位实体 ============
+@EntityDef([MyUnitComp::class], serialize = true, isFinal = true)
+abstract class MyFullUnitDef
+
+// ============ 自定义方块 ============
+class MyTestBlock : mindustry.world.Block("my-test-block") {
+    init {
+        solid = true
+        size = 2
+        update = true
+        hasItems = true
+        hasPower = true
+        configurable = true
+        consumesPower = true
+        outputsPower = false
+    }
+}

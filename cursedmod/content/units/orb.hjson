@@ -1,0 +1,49 @@
+{
+  type: flying
+  name: orb
+  localizedName: 咒能浮游球
+  description: 游荡的紫晶能量球，能快速接近敌人并释放咒能冲击。
+  flying: true
+  health: 240
+  speed: 3.5
+  hitSize: 12
+  armor: 3
+  rotateSpeed: 6
+  maxVelocity: 4.5
+  drag: 0.08
+  engineSize: 2
+  engineOffset: 6
+  itemCapacity: 20
+  weapon: {
+    name: orb-weapon
+    length: 4
+    reload: 25
+    shots: 1
+    inaccuracy: 2
+    rotate: true
+    rotateSpeed: 10
+    targetAir: true
+    targetGround: true
+    shootSound: shoot
+    bullet: {
+      type: BasicBulletType
+      speed: 5.5
+      damage: 18
+      splashDamage: 10
+      splashDamageRadius: 15
+      lifetime: 45
+      width: 6
+      height: 8
+      backColor: "7B00FF"
+      frontColor: "DDA0DD"
+      spin: 6
+    }
+  }
+  research: {
+    parent: cursed-turret
+    objectives: [
+      { type: produce, item: cursed-crystal, count: 50 }
+    ]
+  }
+  buildVisibility: always
+}

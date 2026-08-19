@@ -1,0 +1,7 @@
+{
+  name: "cursed",
+  author: "ZXS",
+  description: "咒能——紫晶科技包。从神秘紫晶中提取能量，打造毁灭性的炮塔与虚空单位。",
+  version: "1.0.0",
+  minGameVersion: 145,
+}

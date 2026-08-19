@@ -24,6 +24,7 @@ dependencies {
     // arc v159.7 对应 commit（含 arc.util.io.Writes/Reads、arc.Core 等）；core v159.7 的 POM 已传递依赖 208a754044
     implementation("com.github.Anuken.Arc:arc-core:208a754044")
     implementation(project(":annotations"))
+    implementation(project(":vanilla"))
 }
 
 sourceSets {

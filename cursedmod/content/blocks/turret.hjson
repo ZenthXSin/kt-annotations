@@ -1,0 +1,41 @@
+{
+  type: ItemTurret
+  name: turret
+  localizedName: 咒能炮塔
+  description: 发射凝结的咒能弹，对敌人造成高额伤害。需要紫晶弹药。
+  size: 2
+  health: 1200
+  range: 180
+  reload: 30
+  shots: 1
+  inaccuracy: 3
+  rotateSpeed: 8
+  targetAir: true
+  targetGround: true
+  shootSound: shootBig
+  ammoTypes: {
+    cursed-crystal: {
+      type: BasicBulletType
+      speed: 6
+      damage: 65
+      splashDamage: 35
+      splashDamageRadius: 22
+      lifetime: 45
+      width: 11
+      height: 14
+      backColor: "9400D3"
+      frontColor: "EE82EE"
+      spin: 8
+      shrinkX: 0.1
+      shrinkY: 0.2
+      status: "shocked"
+      statusDuration: 120
+    }
+  }
+  requirements: [
+    { item: cursed-crystal, amount: 80 }
+    { item: silicon, amount: 60 }
+    { item: titanium, amount: 50 }
+  ]
+  category: turret
+}

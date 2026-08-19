@@ -1,0 +1,12 @@
+{
+  type: item
+  name: crystal
+  localizedName: 紫晶
+  description: 富含神秘能量的紫色晶体。可用于制造咒能武器和单位。
+  hardness: 3
+  cost: 3
+  color: "8B00FF"
+  radioactivity: 0.5
+  explosiveness: 0.2
+  flammability: 0
+}

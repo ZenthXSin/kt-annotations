@@ -66,10 +66,8 @@ object EntityGenerator {
     private fun collectDeps(comp: ComponentInfo, componentByName: Map<String, ComponentInfo>, out: MutableList<ComponentInfo>) {
         for (sup in comp.cls.superTypes) {
             val simple = sup.substringAfterLast('.').removeSuffix("?")
-            val dep = if (simple.endsWith("c")) {
-                val compName = simple.removeSuffix("c") + "Comp"
-                componentByName[compName]
-            } else componentByName[simple]
+            val dep = if (simple.endsWith("c")) componentByName[simple.removeSuffix("c")]
+            else componentByName[simple]
             if (dep != null && !out.contains(dep)) {
                 out.add(dep)
                 collectDeps(dep, componentByName, out)
@@ -80,40 +78,15 @@ object EntityGenerator {
     private fun dependencies(comp: KtClass, componentByName: Map<String, ComponentInfo>): List<ComponentInfo> {
         // 组件通过实现接口(命名 *c)或继承组件类表达依赖
         val out = mutableListOf<ComponentInfo>()
-        val ownName = comp.name.removeSuffix("Comp") + "c"
         for (sup in comp.superTypes) {
             val simple = sup.substringAfterLast('.').removeSuffix("?")
             if (simple.endsWith("c")) {
-                if (simple == ownName) continue
-                val compName = simple.removeSuffix("c") + "Comp"
-                componentByName[compName]?.let { out.add(it) }
+                componentByName[simple.removeSuffix("c")]?.let { out.add(it) }
             } else {
                 componentByName[simple]?.let { out.add(it) }
             }
         }
         return out.distinct()
-    }
-
-    /** 递归收集父 *c 接口的方法签名 */
-    private fun collectParentSignatures(cls: KtClass, componentByName: Map<String, ComponentInfo>, out: MutableSet<String>) {
-        for (sup in cls.superTypes) {
-            val simple = sup.substringAfterLast('.').removeSuffix("?")
-            if (simple.endsWith("c")) {
-                val ownName = cls.name.removeSuffix("Comp") + "c"
-                if (simple == ownName) continue
-                val compName = simple.removeSuffix("c") + "Comp"
-                val parentComp = componentByName[compName] ?: continue
-                for (pm in parentComp.cls.methods.filter { !it.isPrivate && !it.isStatic }) {
-                    out.add(signature(pm))
-                }
-                // 字段生成 getter 签名(如 dead → dead() 和 dead(Boolean))
-                for (pf in parentComp.cls.fields.filter { !it.isStatic && !it.isPrivate && !it.annotations.containsKey("Import") }) {
-                    out.add("${pf.name}()")
-                    out.add("${pf.name}(${pf.type})")
-                }
-                collectParentSignatures(parentComp.cls, componentByName, out)
-            }
-        }
     }
 
     private fun generateInterface(comp: ComponentInfo, componentByName: Map<String, ComponentInfo>, outDir: File, mindustryMode: Boolean = false) {
@@ -145,13 +118,8 @@ object EntityGenerator {
                 // 跳过含泛型参数的方法(如 getCollisions(consumer: Cons<QuadTree<QuadTreeObject>>))
                 !m.parameters.any { p -> p.type.contains('<') || p.type.contains('>') }
             }
-        // 递归收集所有父 *c 接口的方法签名，子接口的重复方法跳过
-        val parentSignatures = HashSet<String>()
-        collectParentSignatures(cls, componentByName, parentSignatures)
         for (m in nonGenericMethods) {
-            val sig = signature(m)
-            if (sig in parentSignatures) continue
-            signatures.add(sig)
+            signatures.add(signature(m))
             // 方法名匹配外部超类(如 Sized, QuadTreeObject, Scaled)的已知成员 → 加 override 修饰符
             val knownOverrideMethods = setOf("hitSize", "hitbox", "fin")
             val fb = FunSpec.builder(m.name)
@@ -160,42 +128,6 @@ object EntityGenerator {
                 .addModifiers(KModifier.ABSTRACT)
             if (m.name in knownOverrideMethods && m.parameters.isEmpty()) fb.addModifiers(KModifier.OVERRIDE)
             if (m.name == "hitbox" && m.parameters.isNotEmpty()) fb.addModifiers(KModifier.OVERRIDE)
-            // 从外部接口(Displayable, Senseable, Settable, Ranged)继承的方法
-            if (m.name == "displayable" && m.parameters.isEmpty()) fb.addModifiers(KModifier.OVERRIDE)
-            if (m.name == "range" && m.parameters.isEmpty()) fb.addModifiers(KModifier.OVERRIDE)
-            if (m.name in listOf("sense", "senseObject", "setProp", "display") && m.parameters.isNotEmpty()) fb.addModifiers(KModifier.OVERRIDE)
-            // Entityc 子接口继承方法
-            if (m.name == "serialize" && m.parameters.isEmpty() && interfaceName(cls) != "Entityc") fb.addModifiers(KModifier.OVERRIDE)
-            // toString 来自 Any
-            if (m.name == "toString" && m.parameters.isEmpty()) fb.addModifiers(KModifier.OVERRIDE)
-            // 方法名匹配父接口属性(如 BlockUnitComp.fun team(Team) 在 Teamc 里是 var team: Team)
-            if (m.parameters.size == 1 || m.parameters.isEmpty()) {
-                val selfInfo = componentByName[cls.name] ?: emptyMap<String, ComponentInfo>()
-                val transitiveDeps = mutableListOf<ComponentInfo>()
-                componentByName[cls.name]?.let { collectDeps(it, componentByName, transitiveDeps) }
-                for ((name, info) in componentByName) {
-                    // 跳过 private 字段(不会在接口中生成属性,因此没有遮蔽)
-                    if (info.cls.fields.any { it.name == m.name && !it.isPrivate && !it.isFinal && !it.annotations.containsKey("Import") && !it.annotations.containsKey("ReadOnly") }) {
-                        val parentIface = interfaceName(info.cls)
-                        // 检查当前接口是否继承父接口
-                        val inherits = cls.superTypes.any { it.endsWith(parentIface) || it.endsWith("$parentIface?") }
-                        if (transitiveDeps.any { it.cls.name == info.cls.name } || inherits) {
-                            fb.addModifiers(KModifier.OVERRIDE)
-                            break
-                        }
-                    }
-                }
-            }
-            // 来自 Entityc 子接口的继承方法
-            val entitycOverrides = setOf("serialize", "isAdded", "isRemote", "classId", "beforeWrite", "read", "write")
-            if (m.name in entitycOverrides && m.parameters.isEmpty() && interfaceName(cls) != "Entityc") {
-                fb.addModifiers(KModifier.OVERRIDE)
-            }
-            // 来自 Java 外部接口(UnitController 等)的 default 方法,重新声明为 abstract 需要 override
-            val unitControllerMethods = setOf("isValidController", "isLogicControllable", "unit")
-            if (m.name in unitControllerMethods && m.parameters.size <= 1) {
-                fb.addModifiers(KModifier.OVERRIDE)
-            }
             iface.addFunction(fb.build())
         }
         // 字段(Kotlin 属性风格:接口声明属性,实体 var 字段自动实现)
@@ -205,15 +137,6 @@ object EntityGenerator {
             if (cls.methods.any { it.name == getterName && it.parameters.isEmpty() && !it.isPrivate && !it.isStatic }) {
                 continue
             }
-            // 跳过属性 setter 与显式 set<Field>() 方法冲突的字段(如 UnitComp.type → setType(UnitType))
-            val setterName = "set" + f.name.replaceFirstChar { it.uppercaseChar() }
-            if (cls.methods.any { it.name == setterName && it.parameters.size == 1 && !it.isPrivate && !it.isStatic }) {
-                continue
-            }
-            // 跳过被同名方法(非 get<X> 风格)遮蔽的字段:如 unit() + unit(Unit?) 已是字段的访问器
-            val hasNamedGetter = cls.methods.any { it.name == f.name && it.parameters.isEmpty() && !it.isPrivate && !it.isStatic }
-            val hasNamedSetter = cls.methods.any { it.name == f.name && it.parameters.size == 1 && !it.isPrivate && !it.isStatic }
-            if (hasNamedGetter || hasNamedSetter) continue
             if (!signatures.contains("${f.name}()") && !signatures.contains("${f.name}(${f.type})")) {
                 iface.addProperty(PropertySpec.builder(f.name, typeName(f.type, componentByName)).mutable(!f.isFinal && !f.annotations.containsKey("ReadOnly")).build())
             } else {
@@ -228,11 +151,7 @@ object EntityGenerator {
         }
         // Sync 组件接口追加同步生命周期方法(实体 override serialize/writeSync/readSync 需要声明)
         if (cls.name.contains("Sync")) {
-            val serializeFun = FunSpec.builder("serialize").returns(BOOLEAN).addModifiers(KModifier.ABSTRACT)
-            // 仅当 Syncc 接口实际继承 Entityc 时才加 override (realmod SyncComp 可能不继承 Entityc)
-            val inheritsEntityc = cls.superTypes.any { it.endsWith("Entityc") || it.endsWith("Entityc?") }
-            if (mindustryMode && inheritsEntityc) serializeFun.addModifiers(KModifier.OVERRIDE)
-            iface.addFunction(serializeFun.build())
+            iface.addFunction(FunSpec.builder("serialize").returns(BOOLEAN).addModifiers(KModifier.ABSTRACT).build())
             if (mindustryMode) {
                 // 真实 Mindustry:对接 arc.util.io.Writes / Reads
                 // 只在 SyncComp 没有声明这些方法时生成(否则与组件自身方法冲突)
@@ -261,11 +180,6 @@ object EntityGenerator {
 
         for (dep in deps) {
             for (f in dep.cls.fields.filter { !it.isStatic && !it.isPrivate && !it.annotations.containsKey("Import") && !it.annotations.containsKey("ReadOnly") }) {
-                // 跳过被 get<Field>() 方法替换的字段(如 PosComp 的 x/y→getX/getY)
-                val getterName = "get" + f.name.replaceFirstChar { it.uppercaseChar() }
-                if (dep.cls.methods.any { it.name == getterName && it.parameters.isEmpty() && !it.isPrivate && !it.isStatic }) {
-                    continue
-                }
                 val prop = PropertySpec.builder(f.name, typeName(f.type), KModifier.PUBLIC, KModifier.OVERRIDE)
                     .mutable(true)
                 f.initializer?.let { prop.initializer("%L", it) }
@@ -367,26 +281,11 @@ object EntityGenerator {
                     System.err.println("[kt-annot] Duplicate field '${f.name}' in entity ${def.fullName}")
                     continue
                 }
-                // 字段被同名方法遮蔽(如 unit/team 在 PlayerComp 中已有 unit()/unit(Unit?) 方法)
-                // 仅当方法参数数匹配属性访问器(0 或 1 参)时才视为遮蔽
-                val hasSameNameMethod = comp.cls.methods.any { it.name == f.name && !it.isPrivate && !it.isStatic && it.parameters.size <= 1 }
-                if (hasSameNameMethod) {
-                    // 生成 @JvmField 后备存储,不生成属性(避免与同名方法冲突)
-                    val propBuilder = PropertySpec.builder(f.name, typeName(f.type, componentByName))
-                        .mutable(true)
-                        .addAnnotation(AnnotationSpec.builder(ClassName("kotlin.jvm", "JvmField")).build())
-                    propBuilder.addModifiers(KModifier.PUBLIC)
-                    jvmFieldBacking.add(f.name)
-                    f.initializer?.let { propBuilder.initializer("%L", resolveFqnInText(it)) }
-                    typeBuilder.addProperty(propBuilder.build())
-                    usedFields.add(f.name)
-                    continue
-                }
                 val propBuilder = PropertySpec.builder(f.name, typeName(f.type, componentByName))
                     .mutable(true)
-                if (f.isPrivate) propBuilder.addModifiers(KModifier.PRIVATE)
+                if (f.isPrivate || f.annotations.containsKey("ReadOnly")) propBuilder.addModifiers(KModifier.PROTECTED, KModifier.OVERRIDE)
                 else propBuilder.addModifiers(KModifier.PUBLIC, KModifier.OVERRIDE)
-                f.initializer?.let { propBuilder.initializer("%L", resolveFqnInText(it)) }
+                f.initializer?.let { propBuilder.initializer("%L", it) }
                 typeBuilder.addProperty(propBuilder.build())
                 allFields.add(f)
 
@@ -404,7 +303,7 @@ object EntityGenerator {
         syncedFields.sortBy { it.name }
 
         // 方法
-        val methods = LinkedHashMap<String, KtMethod>()
+        val methods = LinkedHashMap<String, MutableList<KtMethod>>()
         // 先加入组件方法(含实体),再加入 EntityComp 基方法,确保组件方法不被空基方法覆盖
         for (comp in componentList) {
             for (m in comp.cls.methods.filter { !it.isPrivate && !it.isStatic }) {
@@ -423,54 +322,90 @@ object EntityGenerator {
                 if (accessorField != null && usedFields.contains(accessorField) && !jvmFieldBacked) continue
                 val key = signature(m)
                 if (!methods.containsKey(key)) {
-                    methods[key] = m
+                    methods[key] = mutableListOf(m)
+                } else {
+                    methods[key]!!.add(m)
                 }
             }
         }
         // EntityComp 基方法最后加入,不覆盖已有组件方法(serialize 已由上方预生成,跳过)
         componentByName["EntityComp"]?.cls?.methods?.filter { !it.isPrivate && !it.isStatic && it.name != "serialize" }?.forEach { m ->
             val key = m.name + "(" + m.parameters.joinToString(",") { it.type } + ")"
-            if (!methods.containsKey(key)) methods[key] = m
+            if (!methods.containsKey(key)) methods[key] = mutableListOf(m)
         }
-        for ((key, m) in methods.filter { !(it.value.returnType.length == 1 && it.value.returnType[0].isUpperCase()) }) {
-            val fb = FunSpec.builder(m.name)
+        // P3: groupsForEntity filter
+        val groupsForEntity = groups.filter { g ->
+            val gann = g.annotations.getValue("GroupDef")
+            val groupComps = parseClassArray(gann["value"] ?: "")
+            groupComps.isNotEmpty() && groupComps.all { gcName ->
+                val simpleName = gcName.removeSuffix("c").substringAfterLast('.')
+                componentList.any { it.cls.name.substringAfterLast('.') == simpleName }
+            }
+        }
+        val multiImplMethods = methods.filter { (_, list) -> list.count { !it.isAbstract && it.body != null } > 1 }.keys
+        for ((key, implList) in methods) {
+            val nonAbstract = implList.filter { !it.isAbstract }
+            if (nonAbstract.isEmpty()) continue
+            val chosen = nonAbstract.first()
+            val fb = FunSpec.builder(chosen.name)
                 .addModifiers(KModifier.OVERRIDE)
-                .returns(typeName(m.returnType, componentByName))
-                .addParameters(m.parameters.map { ParameterSpec.builder(it.name, typeName(it.type, componentByName)).build() })
-            if (m.body != null) {
-                var body = m.body!!
-                // 去掉外层花括号
-                body = body.removePrefix("{").removeSuffix("}").trim()
-                body = body.replace("hitDuration", "9f")
-                if (body.isEmpty()) {
-                    // 空方法体 → 空块
+                .returns(typeName(chosen.returnType, componentByName))
+                .addParameters(chosen.parameters.map { ParameterSpec.builder(it.name, typeName(it.type, componentByName)).build() })
+            // P3: self()/as() generic methods only in mindustryMode with Entityc
+            if (mindustryMode && hasEntityc && chosen.name == "self") {
+                fb.addTypeVariable(TypeVariableName("T", ClassName("mindustry.gen", "Entityc")))
+            }
+            if (mindustryMode && hasEntityc && chosen.name == "as") {
+                fb.addTypeVariable(TypeVariableName("T"))
+            }
+            // P3: add/remove group injection (prepend)
+            if (mindustryMode && hasEntityc && (chosen.name == "add" || chosen.name == "remove")) {
+                if (chosen.name == "add") {
+                    fb.addStatement("if (added) return")
+                    for (g in groupsForEntity) {
+                        fb.addStatement("index__%L = Groups.%L.addIndex(this)", g.name.removePrefix("g"), g.name.removePrefix("g"))
+                    }
                 } else {
-                    body = body.replace("self()", "this")
-                    body = body.replace("Vars.collisions.move(this, cx, cy, check)", "kotlin.run { x += cx; y += cy }")
-                    // Make kotlin.math.min fully qualified (no import in generated entity)
-                    body = body.replace(Regex("(?<!\\.)\\bmin\\("), "kotlin.math.min(")
-                    // Mathf → arc.math.Mathf fully qualified (no import in generated entity)
-                    body = body.replace(Regex("(?<!\\.)\\bMathf\\."), "arc.math.Mathf.")
-                    // hitSize 是方法(生成实体里无同名属性),表达式中的 hitSize 引用 → hitSize()
-                    body = body.replace(Regex("\\bhitSize(?!\\s*\\()"), "hitSize()")
-                    // Vars → mindustry.Vars fully qualified
-                    body = body.replace(Regex("(?<!\\.)\\bVars\\."), "mindustry.Vars.")
-                    // Angles → arc.math.Angles fully qualified
-                    body = body.replace(Regex("(?<!\\.)\\bAngles\\."), "arc.math.Angles.")
-                    // 解析方法体中的裸类名引用为 FQN
-                    body = resolveFqnInText(body)
+                    fb.addStatement("if (!added) return")
+                    for (g in groupsForEntity) {
+                        fb.addStatement("Groups.%L.removeIndex(this, index__%L)", g.name.removePrefix("g"), g.name.removePrefix("g"))
+                        fb.addStatement("index__%L = -1", g.name.removePrefix("g"))
+                    }
+                }
+            }
+            // P3: merge multiple impl bodies (writeBlock)
+            val writeBlock = chosen.returnType == "kotlin.Unit" && multiImplMethods.contains(key) && nonAbstract.size > 1
+            for (impl in nonAbstract) {
+                if (impl.body == null) continue
+                var body = impl.body!!
+                body = body.removePrefix("{").removeSuffix("}").trim()
+                if (body.isEmpty()) continue
+                // P3: mindustryMode: EntityComp add/remove empty bodies replaced by group injection
+                if (mindustryMode && hasEntityc && (body == "added = true" || body == "added = false")) continue
+                body = body.replace("hitDuration", "9f")
+                body = body.replace("self()", "this")
+                body = body.replace("Vars.collisions.move(this, cx, cy, check)", "kotlin.run { x += cx; y += cy }")
+                body = body.replace(Regex("(?<!\\.)\\bmin\\("), "kotlin.math.min(")
+                body = body.replace(Regex("(?<!\\.)\\bMathf\\."), "arc.math.Mathf.")
+                body = body.replace(Regex("\\bhitSize(?!\\s*\\()"), "hitSize()")
+                body = body.replace(Regex("(?<!\\.)\\bVars\\."), "mindustry.Vars.")
+                body = body.replace(Regex("(?<!\\.)\\bAngles\\."), "arc.math.Angles.")
+                if (writeBlock) {
+                    fb.addCode("// from ${impl.name}\n")
+                    fb.addCode(body)
+                } else {
                     fb.addCode(body)
                 }
-            } else if (m.isVoidBody && !m.isAbstract) {
-                // 空方法体 → 空块
-            } else {
-                fb.addStatement("TODO(%S)", "not implemented by EntityGenerator — user supplies implementation in component body or overrides")
+            }
+            // P3: pooled -> queueFree at end of remove
+            if (chosen.name == "remove" && pooled) {
+                fb.addStatement("Groups.queueFree(this)")
             }
             typeBuilder.addFunction(fb.build())
         }
 
         // sync methods
-        if (syncedFields.isNotEmpty()) {
+        if (syncedFields.isNotEmpty()) {        if (syncedFields.isNotEmpty()) {
             if (mindustryMode) {
                 typeBuilder.addFunction(
                     FunSpec.builder("writeSync").addModifiers(KModifier.OVERRIDE).addParameter("write", ClassName("arc.util.io", "Writes"))
@@ -555,61 +490,6 @@ object EntityGenerator {
     private fun signature(m: KtMethod): String =
         "${m.name}(${m.parameters.joinToString(",") { it.type }})"
 
-    private fun resolveFqnInText(text: String): String {
-        val knownSimple = mapOf(
-            "Seq" to "arc.struct.Seq",
-            "BuildPlan" to "mindustry.entities.units.BuildPlan",
-            "Unit" to "mindustry.gen.Unit",
-            "CoreBuild" to "mindustry.world.blocks.storage.CoreBlock.CoreBuild",
-            "Interval" to "arc.util.Interval",
-            "Ratekeeper" to "arc.util.Ratekeeper",
-            "QuadTree" to "arc.math.geom.QuadTree",
-            "InputHandler" to "mindustry.input.InputHandler",
-            "QueryEachable" to "mindustry.input.InputHandler.QueryEachable",
-            "Player" to "mindustry.gen.Player",
-            "Administration" to "mindustry.net.Administration",
-            "NetConnection" to "mindustry.net.NetConnection",
-            "CommandAI" to "mindustry.ai.types.CommandAI",
-            "UnitCommand" to "mindustry.ai.UnitCommand",
-            "UnitController" to "mindustry.entities.units.UnitController",
-            "Block" to "mindustry.world.Block",
-            "Tile" to "mindustry.world.Tile",
-            "Floor" to "mindustry.world.blocks.environment.Floor",
-            "CoreBlock" to "mindustry.world.blocks.storage.CoreBlock",
-            "ItemStack" to "mindustry.type.ItemStack",
-            "Packets" to "mindustry.net.Packets",
-            "EventType" to "mindustry.game.EventType",
-            "UnitChangeEvent" to "mindustry.game.EventType.UnitChangeEvent",
-            "Vars" to "mindustry.Vars",
-            "Core" to "arc.Core",
-            "Draw" to "arc.graphics.g2d.Draw",
-            "Fill" to "arc.graphics.g2d.Fill",
-            "Font" to "arc.graphics.g2d.Font",
-            "GlyphLayout" to "arc.graphics.g2d.GlyphLayout",
-            "TextureRegion" to "arc.graphics.g2d.TextureRegion",
-            "Color" to "arc.graphics.Color",
-            "Time" to "arc.util.Time",
-            "Mathf" to "arc.math.Mathf",
-            "Interp" to "arc.math.Interp",
-            "Scl" to "arc.scene.ui.layout.Scl",
-            "Align" to "arc.scene.ui.layout.Align",
-            "Tmp" to "arc.util.Tmp",
-            "Pools" to "arc.util.pooling.Pools",
-            "Strings" to "arc.util.Strings",
-            "Fx" to "mindustry.content.Fx",
-            "UnitTypes" to "mindustry.content.UnitTypes",
-            "Icon" to "mindustry.ui.Icon",
-            "Fonts" to "mindustry.ui.Fonts",
-        )
-        var result = text
-        for ((simple, fqn) in knownSimple) {
-            // (?<![\\w.]) — 前面不能是单词字符或.(避免替换 arc.util.Time 中的 Time)
-            // (?![\\w]) — 后面不能是单词字符(允许.,即 Time.delta → arc.util.Time.delta)
-            result = result.replace(Regex("(?<![\\w.])$simple(?![\\w])")) { fqn }
-        }
-        return result
-    }
-
     private fun stripGenerics(s: String): String {
         val sb = StringBuilder()
         var depth = 0
@@ -630,20 +510,13 @@ object EntityGenerator {
         var s = type.trim()
         val nullable = s.endsWith("?")
         if (nullable) s = s.substring(0, s.length - 1).trim()
-        // 含泛型 → 解析泛型,对 Seq/Array/QuadTree 用 star projection
+        // 含泛型 → 解析泛型,对 Seq/Array 等用 star projection
         if (s.contains('<')) {
             val rawName = stripGenerics(s).trim()
             val simple = rawName.substringAfterLast('.').removeSuffix("?")
-            if (simple == "Seq" || simple == "Array" || simple == "QuadTree") {
-                // QuadTree 需要专用 FQN(不含泛型参的数字面量)
-                val baseFqn = if (simple == "QuadTree") "arc.math.geom.QuadTree" else rawName.removePrefix("kotlin.")
-                val baseTn = ClassName.bestGuess(baseFqn)
-                if (simple == "QuadTree") {
-                    // QuadTree 用 star projection
-                    val ptn = io.eve.ktannot.gen.TypeUtils.quadTreeStar()
-                    return if (nullable) ptn.copy(nullable = true) else ptn
-                }
-                val ptn = io.eve.ktannot.gen.TypeUtils.seqStar()
+            if (simple == "Seq" || simple == "Array") {
+                val baseTn = ClassName.bestGuess(rawName.removePrefix("kotlin."))
+                val ptn = ClassName.bestGuess(rawName.removePrefix("kotlin."))
                 return if (nullable) ptn.copy(nullable = true) else ptn
             }
             val tn = ClassName.bestGuess(rawName.removePrefix("kotlin."))
@@ -654,54 +527,6 @@ object EntityGenerator {
         if (componentByName.containsKey(simple)) {
             val cn = ClassName(GEN_PKG, interfaceName(componentByName.getValue(simple).cls))
             return if (nullable) cn.copy(nullable = true) else cn
-        }
-
-        // 先检查基本类型(含 Unit = kotlin.Unit),排除 knownFqn 对 "Unit" 的干扰
-        // 注意:如果 nullable=true,Unit 不可能是 kotlin.Unit(void 不可空),跳过后面的基本类型匹配
-        if (!nullable) {
-            val primitiveTn = when (s) {
-                "Int", "int", "kotlin.Int" -> INT
-                "Float", "float", "kotlin.Float" -> FLOAT
-                "Boolean", "boolean", "kotlin.Boolean" -> BOOLEAN
-                "Long", "long", "kotlin.Long" -> LONG
-                "Double", "double", "kotlin.Double" -> DOUBLE
-                "Short", "short", "kotlin.Short" -> SHORT
-                "Byte", "byte", "kotlin.Byte" -> BYTE
-                "Char", "char", "kotlin.Char" -> CHAR
-                "String", "kotlin.String" -> STRING
-                "Unit", "void", "kotlin.Unit" -> UNIT
-                "Any", "kotlin.Any" -> ANY
-                else -> null
-            }
-            if (primitiveTn != null) return if (nullable) primitiveTn.copy(nullable = true) else primitiveTn
-        }
-
-        // 外部类型 FQN 映射(Scanner 的 knownFqn 对应项)
-        // 注意:"Unit" 已在基本类型中处理为 kotlin.Unit;Scanner 已将 Unit? 解析为 mindustry.gen.Unit?
-        val knownFqn = mapOf(
-            "Administration" to "mindustry.net.Administration",
-            "NetConnection" to "mindustry.net.NetConnection",
-            "InputHandler" to "mindustry.input.InputHandler",
-            "UnitCommand" to "mindustry.ai.UnitCommand",
-            "BuildPlan" to "mindustry.entities.units.BuildPlan",
-            "QueryEachable" to "mindustry.input.InputHandler.QueryEachable",
-            "PlayerInfo" to "mindustry.net.Administration.PlayerInfo",
-            "KickReason" to "mindustry.net.Packets.KickReason",
-            "Unit" to "mindustry.gen.Unit",
-            "QuadTree" to "arc.math.geom.QuadTree",
-            "Ratekeeper" to "arc.util.Ratekeeper",
-            "Interval" to "arc.util.Interval",
-            "CoreBuild" to "mindustry.world.blocks.storage.CoreBlock.CoreBuild",
-            "CommandAI" to "mindustry.ai.types.CommandAI",
-            "Player" to "mindustry.gen.Player",
-            "Font" to "arc.graphics.g2d.Font",
-            "GlyphLayout" to "arc.graphics.g2d.GlyphLayout",
-            "TextureRegion" to "arc.graphics.g2d.TextureRegion",
-        )
-        val fqn = knownFqn[s] ?: knownFqn[simple]
-        if (fqn != null) {
-            val tn = ClassName.bestGuess(fqn)
-            return if (nullable) tn.copy(nullable = true) else tn
         }
 
         val tn = when (s) {

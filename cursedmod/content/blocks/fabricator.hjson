@@ -1,0 +1,30 @@
+{
+  type: GenericCrafter
+  name: fabricator
+  localizedName: 紫晶合成器
+  description: 将铅和硅转化为紫晶。启动后持续产出咒能核心材料。
+  size: 2
+  health: 640
+  hasPower: true
+  hasItems: true
+  craftTime: 60
+  outputItem: cursed-crystal
+  consumePower: 1.5
+  consumeItems: [
+    { item: lead, amount: 2 }
+    { item: silicon, amount: 1 }
+  ]
+  requirements: [
+    { item: lead, amount: 100 }
+    { item: silicon, amount: 60 }
+    { item: copper, amount: 80 }
+  ]
+  category: crafting
+  research: {
+    parent: silicon-smelter
+    requirements: [
+      { item: lead, amount: 200 }
+      { item: silicon, amount: 100 }
+    ]
+  }
+}
