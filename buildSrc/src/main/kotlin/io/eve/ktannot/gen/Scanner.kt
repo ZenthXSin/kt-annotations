@@ -229,7 +229,7 @@ class ContentScanner {
         val methods = klass.declarations.filterIsInstance<KtNamedFunction>().mapNotNull { parseMethod(it) }
 
         val result = mutableListOf(
-            KtClass(pkg, fqn, kind, annotations, rawSupers, fields, methods).also { it.rawSuperTypes = rawSupers }
+            KtClass(pkg, name, kind, annotations, rawSupers, fields, methods).also { it.rawSuperTypes = rawSupers }
         )
 
         // nested classes
