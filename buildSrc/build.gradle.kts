@@ -17,7 +17,7 @@ dependencies {
 }
 
 group = "io.eve.ktannot"
-version = "v159.7.0"
+version = "v159.7.1"
 
 gradlePlugin {
     plugins {
