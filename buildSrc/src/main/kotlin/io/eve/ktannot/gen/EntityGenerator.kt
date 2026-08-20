@@ -294,7 +294,7 @@ object EntityGenerator {
         val valueSpec = ann["value"] ?: ""
         val compNames = parseClassArray(valueSpec)
         for (cn in compNames) {
-            val resolved = componentByName[cn.removeSuffix("c")] ?: componentByName[cn.substringAfterLast('.')]
+            val resolved = componentByName[cn.removeSuffix("c")] ?: componentByName[cn.removeSuffix("c") + "Comp"] ?: componentByName[cn.substringAfterLast('.')]
             if (resolved != null && !componentList.contains(resolved)) {
                 componentList.add(resolved)
                 collectDeps(resolved, componentByName, componentList)
