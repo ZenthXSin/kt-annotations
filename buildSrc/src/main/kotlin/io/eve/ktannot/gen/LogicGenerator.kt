@@ -10,7 +10,11 @@ import java.io.File
  */
 object LogicGenerator {
 
-    fun generate(classes: List<KtClass>, outDir: File) {
+    fun generate(
+        classes: List<KtClass>,
+        outDir: File,
+        genPackage: String = "io.eve.ktannot.gen",
+    ) {
         val types = classes.filter { it.annotations.containsKey("RegisterStatement") }
         if (types.isEmpty()) return
 
@@ -62,7 +66,7 @@ object LogicGenerator {
         reader.endControlFlow()
         reader.addStatement("return null")
 
-        val file = FileSpec.builder("io.eve.ktannot.gen", "LogicIO")
+        val file = FileSpec.builder(genPackage, "LogicIO")
             .addType(
                 TypeSpec.objectBuilder("LogicIO")
                     .addProperty(allStatements)

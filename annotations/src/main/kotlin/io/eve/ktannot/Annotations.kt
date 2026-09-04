@@ -49,6 +49,11 @@ annotation class ReadOnly
 @Retention(AnnotationRetention.SOURCE)
 annotation class Component(val base: Boolean = false, val genInterface: Boolean = true)
 
+/** 组件别名:对标 EntityAnno 的 @EntityComponent(ent.anno.Annotations.EntityComponent)。 */
+@Target(AnnotationTarget.CLASS)
+@Retention(AnnotationRetention.SOURCE)
+annotation class EntityComponent(val base: Boolean = false, val genInterface: Boolean = true)
+
 /** 方法由注解处理器实现 */
 @Target(AnnotationTarget.FUNCTION)
 @Retention(AnnotationRetention.SOURCE)
@@ -77,7 +82,7 @@ annotation class GroupDef(
 )
 
 /** 实体定义 */
-@Target(AnnotationTarget.CLASS)
+@Target(AnnotationTarget.CLASS, AnnotationTarget.FIELD, AnnotationTarget.PROPERTY)
 @Retention(AnnotationRetention.SOURCE)
 annotation class EntityDef(
     val value: Array<KClass<*>>,
@@ -87,6 +92,8 @@ annotation class EntityDef(
     val genio: Boolean = true,
     val legacy: Boolean = false,
     val excludeGroups: Array<String> = [],
+    /** 生成实体时继承的基类(全限定名,如 mindustry.gen.UnitEntity)。仅类级 EntityDef 生效。 */
+    val extends: String = "",
 )
 
 /** 实体内部接口 */

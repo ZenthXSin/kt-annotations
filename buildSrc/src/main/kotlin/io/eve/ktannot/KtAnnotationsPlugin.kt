@@ -1,5 +1,6 @@
 package io.eve.ktannot
 
+import io.eve.ktannot.gen.AssetsGenerator
 import io.eve.ktannot.gen.ContentScanner
 import io.eve.ktannot.gen.EntityGenerator
 import io.eve.ktannot.gen.LogicGenerator
@@ -10,30 +11,35 @@ import org.gradle.api.DefaultTask
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.file.DirectoryProperty
-import org.gradle.api.tasks.InputFiles
+import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.InputDirectory
 import org.gradle.api.tasks.OutputDirectory
+import org.gradle.api.tasks.PathSensitive
+import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
 import java.io.File
 
 /** 生成任务:扫描 src 目录的 Kotlin 源码,运行全部注解处理器,输出生成代码。 */
 open class GenerateTask : DefaultTask() {
 
-    @get:InputFiles
+    @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.RELATIVE)
     val sourceDir: DirectoryProperty = project.objects.directoryProperty()
 
     @get:OutputDirectory
     val outputDir: DirectoryProperty = project.objects.directoryProperty()
 
     // 真实 Mindustry 模式:生成对接 mindustry.net.Packet / arc.util.io.Writes / mindustry.world.Block / arc.Core 的代码
-    @get:org.gradle.api.tasks.Internal
+    @get:Input
     var mindustryMode: Boolean = false
-    @get:org.gradle.api.tasks.Internal
+    @get:Input
     var genPackage: String = "io.eve.ktannot.gen"
 
     @TaskAction
     fun run() {
         val src = sourceDir.get().asFile
         val out = outputDir.get().asFile
+        if (out.exists()) out.deleteRecursively()
         out.mkdirs()
 
         logger.lifecycle("[kt-annot] scanning ${src.path} (mindustryMode=$mindustryMode)")
@@ -41,11 +47,14 @@ open class GenerateTask : DefaultTask() {
         logger.lifecycle("[kt-annot] found ${classes.size} classes")
 
         // 运行全部注解处理器(对标 Mindustry 6 大处理器)
-        EntityGenerator.GEN_PKG = genPackage; EntityGenerator.generate(classes, out, mindustryMode)   // @EntityDef / @Component / @GroupDef
-        StructGenerator.generate(classes, out)                  // @Struct
-        RegionGenerator.generate(classes, out, mindustryMode)          // @Load
-        RemoteGenerator.generate(classes, out, mindustryMode)   // @Remote
-        LogicGenerator.generate(classes, out)                   // @RegisterStatement
+        EntityGenerator.GEN_PKG = genPackage
+        AssetsGenerator.GEN_PKG = genPackage
+        EntityGenerator.generate(classes, out, mindustryMode)   // @EntityDef / @Component / @GroupDef
+        StructGenerator.generate(classes, out, genPackage)                  // @Struct
+        RegionGenerator.generate(classes, out, mindustryMode, genPackage) // @Load
+        RemoteGenerator.generate(classes, out, mindustryMode, genPackage)   // @Remote
+        LogicGenerator.generate(classes, out, genPackage)                   // @RegisterStatement
+        AssetsGenerator.generate(out, mindustryMode)                         // generated asset stubs
 
         logger.lifecycle("[kt-annot] generation done -> ${out.path}")
     }
@@ -86,9 +95,8 @@ class KtAnnotationsPlugin : Plugin<Project> {
                     val main = srcSets.getByName("main")
                     main.java.srcDir(outputPath)
                 }
-                val compileTask = target.tasks.findByName("compileKotlin")
-                if (compileTask != null) {
-                    compileTask.dependsOn(taskProvider.flatMap { it.outputDir })
+                target.tasks.matching { it.name == "compileKotlin" || it.name == "compileJava" }.configureEach {
+                    it.dependsOn(taskProvider)
                 }
             }
         }

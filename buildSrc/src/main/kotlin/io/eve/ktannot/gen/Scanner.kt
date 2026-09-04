@@ -45,16 +45,24 @@ class ContentScanner {
                     val text = file.readText()
                     val ktFile = psiFactory.createFileFromText(file.name, org.jetbrains.kotlin.idea.KotlinFileType.INSTANCE, text) as KtFile
                     val pkg = ktFile.packageDirective?.qualifiedName ?: ""
+                    val fileImports = mutableMapOf<String, String>()
                     // 收集此文件的 import 声明(star import 无法映射单独名字,跳过)
                     for (importDir in ktFile.importDirectives) {
                         val importedPath = importDir.importedFqName?.asString() ?: continue
                         if (importDir.isAllUnder) continue
-                        importNameToFqn[importedPath.substringAfterLast('.')] = importedPath
+                        val importedName = importedPath.substringAfterLast('.')
+                        // 某些源码历史上同时导入了不存在的 mindustry.gen.UnitController；
+                        // 159.7 的真实类型是 mindustry.entities.units.UnitController。
+                        if (importedPath != "mindustry.gen.UnitController") {
+                            val normalizedPath = if (importedPath == "arc.math.geom.Posc") "mindustry.gen.Posc" else importedPath
+                            importNameToFqn[importedName] = normalizedPath
+                            fileImports[importedName] = normalizedPath
+                        }
                     }
                     ktFile.declarations.forEach { decl ->
                         when (decl) {
-                            is PsiKtClass -> result.addAll(scanClass(decl, pkg))
-                            is KtObjectDeclaration -> result.addAll(scanClass(decl, pkg))
+                            is PsiKtClass -> result.addAll(scanClass(decl, pkg).onEach { it.imports = fileImports.toMap() })
+                            is KtObjectDeclaration -> result.addAll(scanClass(decl, pkg).onEach { it.imports = fileImports.toMap() })
                         }
                     }
                 } catch (e: Exception) {
@@ -69,16 +77,16 @@ class ContentScanner {
             // 第二遍:解析所有类型引用(优先级: import 映射 > 扫描到的类 > knownFqn 表 > 原样)
             result.forEach { c ->
                 c.rawSuperTypes = c.rawSuperTypes.map { r ->
-                    if (r.contains(".")) r else importNameToFqn[r] ?: nameToFqn[r] ?: knownFqn[r] ?: r
+                    if (r.contains(".")) r else c.imports[r] ?: importNameToFqn[r] ?: nameToFqn[r] ?: knownFqn[r] ?: r
                 }
                 c.superTypes = c.rawSuperTypes
                 c.fields = c.fields.map { f ->
-                    f.copy(type = resolveType(f.type, importNameToFqn, nameToFqn))
+                    f.copy(type = resolveType(f.type, importNameToFqn + c.imports, nameToFqn))
                 }
                 c.methods = c.methods.map { m ->
                     m.copy(
-                        returnType = resolveType(m.returnType, importNameToFqn, nameToFqn),
-                        parameters = m.parameters.map { p -> p.copy(type = resolveType(p.type, importNameToFqn, nameToFqn)) }
+                        returnType = resolveType(m.returnType, importNameToFqn + c.imports, nameToFqn),
+                        parameters = m.parameters.map { p -> p.copy(type = resolveType(p.type, importNameToFqn + c.imports, nameToFqn)) }
                     )
                 }
             }
@@ -186,6 +194,11 @@ class ContentScanner {
         if (type.length == 1 && type[0].isUpperCase()) return type
 
         val clean = type.removeSuffix("?")
+        // Kotlin built-ins take precedence over the scanned Mindustry class named Unit.
+        // Otherwise a Java void/Kotlin Unit method is emitted as mindustry.gen.Unit.
+        if (clean in setOf("Unit", "kotlin.Unit", "void", "Int", "kotlin.Int", "Float", "kotlin.Float", "Boolean", "kotlin.Boolean", "Long", "kotlin.Long", "Double", "kotlin.Double", "Short", "kotlin.Short", "Byte", "kotlin.Byte", "Char", "kotlin.Char", "String", "kotlin.String", "Any", "kotlin.Any")) {
+            return type
+        }
         val resolved = importNameToFqn[clean] ?: nameToFqn[clean] ?: knownFqn[clean]
         if (resolved != null) return if (type.endsWith("?")) "$resolved?" else resolved
         // 泛型:递归解析每个类型参数(支持嵌套)

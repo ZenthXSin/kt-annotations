@@ -43,6 +43,14 @@ public class TypeUtils {
         );
     }
 
+    /** Class<? extends Unit>:Java 调用方传 UnitEntity.class / PayloadUnit.class 等子类,不能用不变的 Class<Unit>。 */
+    public static ParameterizedTypeName classExtends(ClassName bound) {
+        return ParameterizedTypeName.get(
+            ClassName.bestGuess("java.lang.Class"),
+            com.squareup.kotlinpoet.WildcardTypeName.producerOf(bound)
+        );
+    }
+
     public static ParameterizedTypeName seqOf(ClassName elementType) {
         return ParameterizedTypeName.get(
             ClassName.bestGuess("arc.struct.Seq"),

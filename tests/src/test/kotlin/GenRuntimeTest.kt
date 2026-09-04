@@ -1,8 +1,9 @@
 package io.eve.ktannot.test
 
 import io.eve.ktannot.gen.*
-import io.eve.ktannot.testcontent.Coord
+import io.eve.ktannot.gen.Coord
 import io.eve.ktannot.testcontent.PrintStatement
+import mindustry.world.MyBlock
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -38,6 +39,16 @@ class GenRuntimeTest {
         (p2 as Packet).setReadInput(listOf(99))
         p2.handled()
         assertEquals(99, p2.id)
+    }
+
+    @Test
+    fun loadRegionsUsesConfiguredPackageAndLengths() {
+        val block = MyBlock("demo")
+        io.eve.ktannot.gen.ContentRegions.loadRegions(block)
+        assertEquals("block-demo-icon", block.icon?.name)
+        assertEquals("block-demo-0-0", block.frames[0][0].name)
+        assertEquals("block-demo-1-0", block.frames[1][0].name)
+        assertEquals("block-demo-0-2", block.frames[0][2].name)
     }
 
     @Test

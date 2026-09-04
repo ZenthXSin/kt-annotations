@@ -54,11 +54,11 @@ class RealMod : Mod() {
             Log.info("==== KTA TEST START ====")
 
             // ---------- @Struct:位打包 ----------
-            val packed = io.eve.realmod.PackedPos.get(3.toShort(), (-5).toShort(), 110.toByte(), true)
-            val unpackX = io.eve.realmod.PackedPos.x(packed)
-            val unpackY = io.eve.realmod.PackedPos.y(packed)
-            val unpackLayer = io.eve.realmod.PackedPos.layer(packed)
-            val unpackAlive = io.eve.realmod.PackedPos.alive(packed)
+            val packed = io.eve.ktannot.gen.PackedPos.get(3.toShort(), (-5).toShort(), 110.toByte(), true)
+            val unpackX = io.eve.ktannot.gen.PackedPos.x(packed)
+            val unpackY = io.eve.ktannot.gen.PackedPos.y(packed)
+            val unpackLayer = io.eve.ktannot.gen.PackedPos.layer(packed)
+            val unpackAlive = io.eve.ktannot.gen.PackedPos.alive(packed)
             Log.info("KTA-STRUCT x=@ expect=3 y=@ expect=-5 layer=@ expect=110 alive=@ expect=true",
                 unpackX, unpackY, unpackLayer, unpackAlive)
 

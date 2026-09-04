@@ -5,7 +5,7 @@
 
 - 处理方式：Gradle 插件内嵌 **Kotlin PSI** 扫描器 + **KotlinPoet** 代码生成器，不依赖 javac/kapt，无需注解处理器的 JVM 配置
 - 两种模式：`mindustryMode=true` 生成对接真实引擎的代码；`false` 生成对接内置桩的独立可运行代码（便于纯 JVM 单测）
-- 版本：插件 `io.eve.ktannot` / 注解库 `io.eve.ktannot:annotations`，`v159.7.0`
+- 版本：插件 `io.eve.ktannot` / 注解库 `io.eve.ktannot:annotations`，`v159.7.2`
 
 ---
 
@@ -94,9 +94,9 @@ mod jar
 
 | 坐标 | 内容 |
 |---|---|
-| `io.eve.ktannot:buildSrc:v159.7.0` | 插件实现 |
-| `io.eve.ktannot:io.eve.ktannot.gradle.plugin:v159.7.0` | 插件 marker |
-| `io.eve.ktannot:annotations:v159.7.0` | 注解库（运行时依赖） |
+| `io.eve.ktannot:buildSrc:v159.7.2` | 插件实现 |
+| `io.eve.ktannot:io.eve.ktannot.gradle.plugin:v159.7.2` | 插件 marker |
+| `io.eve.ktannot:annotations:v159.7.2` | 注解库（运行时依赖） |
 
 ### 3.2 在消费项目接入
 
@@ -118,7 +118,7 @@ pluginManagement {
 ```kotlin
 plugins {
     kotlin("jvm") version "2.2.0"
-    id("io.eve.ktannot") version "v159.7.0"
+    id("io.eve.ktannot") version "v159.7.2"
 }
 
 ktAnnotations {
@@ -127,7 +127,7 @@ ktAnnotations {
 }
 
 dependencies {
-    implementation("io.eve.ktannot:annotations:v159.7.0")
+    implementation("io.eve.ktannot:annotations:v159.7.2")
     // 真实 mod 还需要引擎依赖（见实战篇）
 }
 
@@ -197,6 +197,7 @@ u.y = 20f
 
 - 组件类通常写成 `abstract class`；字段会生成到实体类，方法体会合并进实体类。
 - `base=true`（或加 `@BaseComponent`）表示该组件还生成**抽象基类** `XxxBase`，包含自身与依赖组件的字段，供手写子类复用。
+- `@EntityComponent` 是 `@Component` 的等价别名（对标 EntityAnno 的 `ent.anno.Annotations.EntityComponent`），便于从原版注解迁移，两类写法都识别。
 - 组件依赖两种表达方式：
   - 继承另一个组件类：`abstract class UnitComp : PosComp()`
   - 实现生成的 `*c` 接口：`abstract class MyUnitComp : Entityc`（组件依赖通过接口递归收集）
@@ -234,18 +235,29 @@ abstract class EntityComp {
 
 只要组件集合中存在 `EntityComp`，**所有** `@EntityDef` 实体都会实现 `Entityc` 接口并合并这些生命周期方法。
 
-#### `@EntityDef(value, isFinal = true, pooled = false, serialize = true, genio = true, legacy = false, excludeGroups = [])` —— 实体定义（类级）
+#### `@EntityDef(value, isFinal = true, pooled = false, serialize = true, genio = true, legacy = false, excludeGroups = [], extends = "")` —— 实体定义（类级 / 字段级）
 
 ```kotlin
 @EntityDef([PosComp::class, SyncComp::class], serialize = true, isFinal = true)
 abstract class TestUnitDef
+
+// 字段级：为 UnitType 字段声明实体（对标 EntityAnno 字段级 EntityDef）
+class MyContent {
+    @EntityDef([UnitComp::class], extends = "mindustry.gen.UnitEntity")
+    lateinit var testUnit: UnitType
+}
 ```
 
 - `value`：组件列表（写 `PosComp::class` 或 `Posc::class` 均可），依赖组件递归收集、保序去重。
 - `isFinal`：实体类 `final`（默认）或 `open`。
 - `serialize`：实体 `serialize()` 返回值（默认 true）。
+- `extends`：实体继承的基类全限定名（如 `mindustry.gen.UnitEntity`、`mindustry.entities.units.BuildingTetherPayloadUnit`）。**类级**与**字段级** `@EntityDef` 均生效：指定后生成的实体继承该基类（此时不重复实现 `Entityc`），可用于生成直接对接原版实体体系（`mindustry.gen.Unit` 子类）的单位实体。字段级默认 `mindustry.gen.UnitEntity`。
 - `pooled` / `genio` / `legacy` / `excludeGroups`：当前版本已解析但**尚未参与生成逻辑**（见 [11. 已知限制](#十一已知限制)）。
 - 生成实体内容：组件字段合并（去重；`@Import` 跳过；被 `getX()` 方法或同名方法替代的字段转 `@JvmField` 后备存储）、组件方法合并（签名去重，组件方法优先于 EntityComp 基方法）、`serialize()`、同步方法、`toString()`（默认返回类名）、组接口实现。
+- 类级与字段级实体都会生成：
+  - `create()` 伴生工厂方法（`@JvmStatic`，直接 `TestUnit.create()` 构造）；
+  - 外部 vanilla `*c` 接口面（`Teamc/Drawc/Posc/Entityc/Healthc` 等在 `KNOWN_VANILLA_C` 表内的接口）实现——`mindustryMode` 且未指定 `extends` 时自动补齐接口方法存根；
+  - 统一注册入口 `EntityRegistry`（见 [5.8](#58-entityregistry)）。
 
 #### `@GroupDef(value, exclude = [], collide = false, spatial = false, mapping = false, update = false)` —— 实体组（类级）
 
@@ -392,7 +404,7 @@ class KtTestBlock : mindustry.world.Block("kt-test-block") {
 ```
 
 - 占位符：`@` → `content.name`；`@size` → `(content as Block).size`；`#` / `#1` → 第一维下标；`#2` → 第二维下标。
-- `length` / `lengths`：数组字段，生成 `for (INDEX0 in 0 until len)` 循环（`lengths` 多维多下标当前仅判定未完整展开）。
+- `length` / `lengths`：数组字段。`length = N` 生成单维循环；`lengths = [2, 3]` 生成**完整嵌套循环**（`for INDEX0 … for INDEX1 …`，占位符 `#1/#2` 对应各维下标）。
 - `fallback`：非 `"error"` 时作为 `atlas.find(name, fallback)` 的回退参数。
 - mindustry 模式生成 `arc.Core.atlas.find(...)`；headless 无 atlas，`@Load` 仅在客户端有意义。
 - 调用入口：生成的 `ContentRegions.loadRegions(content: MappableContent)`，由 mod 在方块 `load()` 中调用（示例见实战篇）。
@@ -522,6 +534,33 @@ public object ContentRegions {
 }
 ```
 
+### 5.8 实体注册（`EntityRegistry.kt`）
+
+所有 `@EntityDef`（类级与字段级）生成实体后，`mindustryMode` 下会额外生成统一注册入口：
+
+```kotlin
+public object EntityRegistry {
+  // 创建 UnitType 并绑定实体类构造器（entityClass 需是 mindustry.gen.Unit 子类）
+  public fun content(name: String, entityClass: Class<out Unit>, creator: Func<String, UnitType>): UnitType
+
+  // 把全部生成实体类映射进 EntityMapping.nameMap
+  public fun register()
+}
+```
+
+用法（mod 内容注册处）：
+
+```kotlin
+val type = io.eve.ktannot.gen.EntityRegistry.content("my-test-unit", MyUnitEntity::class.java) { name ->
+    UnitType(name)
+}
+type.constructor = arc.func.Prov { MyUnitEntity() }   // 也可手动绑定
+io.eve.ktannot.gen.EntityRegistry.register()           // 批量注册所有生成实体
+```
+
+- `EntityMapping.nameMap` 的 key 是实体类名（如 `MyUnitEntity`），供存档/网络按名反序列化实体。
+- 字段级 `@EntityDef` 默认继承 `mindustry.gen.UnitEntity`，因此可直接作为 `UnitType` 的实体类型，解决原版 EntityAnno 迁移的核心阻塞点。
+
 ---
 
 ## 六、实战篇：真实 Mindustry mod
@@ -552,7 +591,7 @@ ktAnnotations { mindustryMode = true; genPackage = "io.eve.ktannot.gen" }
 dependencies {
     implementation("com.github.Anuken.Mindustry:core:v159.7")   // 引擎核心
     implementation("com.github.Anuken.Arc:arc-core:208a754044") // arc（core 传递依赖同 commit）
-    implementation("io.eve.ktannot:annotations:v159.7.0")
+    implementation("io.eve.ktannot:annotations:v159.7.2")
 }
 sourceSets { main { kotlin.srcDir("src/main/kotlin"); kotlin.srcDir("build/generated/ktannot/main/kotlin") } }
 ```
@@ -580,15 +619,21 @@ java -jar server-159.7-release.jar   # config/mods 放 realmod.jar，观察 KTA-
 
 ### 6.4 实体与 EntityMapping
 
-当前版本**不自动生成** `create()`/EntityMapping 注册表（区别于原版 EntityAnno），需手动注册：
+生成实体自带 `create()` 工厂（`@JvmStatic`）与统一 `EntityRegistry` 注册入口：
 
 ```kotlin
+// 方式一：手动注册（更细粒度，控制 key/别名）
 val prov = arc.func.Prov { io.eve.ktannot.gen.MyFullUnit() }
 EntityMapping.nameMap.put("my-full-unit", prov)
 EntityMapping.register("my-full-unit-v2", prov)   // 自定义 id 别名
-val u = io.eve.ktannot.gen.MyFullUnit()          // 直接构造
+val u = io.eve.ktannot.gen.MyFullUnit.create()   // 直接构造
 u.add(); u.remove()                              // Entityc 生命周期
+
+// 方式二：批量注册所有 @EntityDef 生成实体（按类名作 key）
+io.eve.ktannot.gen.EntityRegistry.register()
 ```
+
+字段级 `@EntityDef`（继承 `mindustry.gen.UnitEntity`）可作为 `UnitType` 实体类型，用 `EntityRegistry.content(name, MyUnitEntity::class.java) { UnitType(it) }` 绑定（见 [5.8](#58-entityregistry)）。
 
 ### 6.5 打包 mod jar
 
@@ -744,23 +789,23 @@ kt-annotations/
 
 ## 十一、已知限制
 
-1. **实体管线独立，不合并进 `mindustry.gen.Unit`**。原版 EntityAnno 的 `@EntityDef({Unitc.class, ...})` 会把 mod 组件注入官方实体体系；kt-annotations 生成的是 mod 本地独立实体类。因此生成的单位实体**不能直接作为 `UnitType` 的实体类型**（引擎要求 `UnitType` 实体是 `mindustry.gen.Unit` 子类）。这是与 EntityAnno 最核心的差异（如 Aeronautics 迁移时发现的根本阻塞点）。
+1. **实体管线独立，不自动合并进 `mindustry.gen.Unit`**。原版 EntityAnno 的 `@EntityDef({Unitc.class, ...})` 会把 mod 组件注入官方实体体系；kt-annotations 默认生成 mod 本地独立实体类。**缓解**：`v159.7.2` 起字段级 `@EntityDef` 支持 `extends = "mindustry.gen.UnitEntity"`（默认值），生成直接继承原版实体的类，可通过 `EntityRegistry.content(...)` 作为 `UnitType` 实体类型（见 [5.8](#58-entityregistry)）。
 2. **无 `@Remove` 等价注解**：无法从合并实体中移除某组件的方法。
 3. **已声明未接入的注解**：`@Replace`、`@Final`、`@SyncLocal`、`@NoSync`、`@NoSerialize`、`@InternalImpl`、`@MethodPriority`、`@CallSuper`、`@OverrideCallSuper`、`@StyleDefaults`、`@TypeIOHandler`。
-4. **参数未完整实现**：`@EntityDef(pooled/genio/legacy/excludeGroups)`、`@GroupDef(collide/spatial/mapping/update)`、`@SyncField(value/clamped)`、`@Remote(priority)`、`@Load(lengths)` 已解析但未参与生成。
+4. **参数未完整实现**：`@EntityDef(pooled/genio/legacy/excludeGroups)`、`@GroupDef(collide/spatial/mapping/update)`、`@SyncField(value/clamped)`、`@Remote(priority)` 已解析但未参与生成。
 5. **类型解析依赖白名单**：Scanner 用 `knownFqn` 表把简单类型名解析为 FQN，白名单外的类型请写全限定名，或扩展 `Scanner.knownFqn`。
 6. **含泛型参数的方法被跳过**（如 `getCollisions(consumer: Cons<QuadTree<...>>)`）。
 7. **方法体合成为文本替换**：`self()/Vars/Mathf/min/hitSize` 等替换有正则边界保护，但复杂表达式仍建议构建后检查生成结果。
-8. **`AssetsGenerator`（Tex/Sounds/Musics 存根）已实现但未接入 `GenerateTask`**。
+8. **`AssetsGenerator`（Tex/Sounds/Musics 存根）已接入 `GenerateTask`**，但仅为占位存根，运行时由 Mindustry 自己的 asset 加载器填充（对齐原版 `AssetsProcess` 的能力有限）。
 9. **`@Load` 在 headless 无 atlas 环境不可用**（仅客户端有意义）。
-10. 生成实体**不自动生成** `create()`/EntityMapping 注册表，需手动注册（见 6.4）。
+10. **`@Remote` 白名单外的参数类型**：mindustry 模式下仅支持原语 + `Player`，其他类型生成时抛错跳过。
 
 ---
 
 ## 十二、FAQ
 
 **Q：插件解析不到 `io.eve.ktannot`？**
-A：先执行 `./gradlew :annotations:publishToMavenLocal :buildSrc:publishToMavenLocal`，并在消费项目 `settings.gradle.kts` 的 `pluginManagement.repositories` 加 `mavenLocal()`；`plugins` 块带版本 `id("io.eve.ktannot") version "v159.7.0"`。
+A：先执行 `./gradlew :annotations:publishToMavenLocal :buildSrc:publishToMavenLocal`，并在消费项目 `settings.gradle.kts` 的 `pluginManagement.repositories` 加 `mavenLocal()`；`plugins` 块带版本 `id("io.eve.ktannot") version "v159.7.2"`。
 
 **Q：生成代码没出现 / 目录为空？**
 A：检查 ① `ktAnnotations.sourceDir` 是否指向真实源码目录（默认 `src/main/kotlin`）；② `build` 是否依赖 `generateKtAnnotations`；③ 生成目录是否已加入 `kotlin.srcDir`。
@@ -778,7 +823,7 @@ A：组件间重名字段会被去重（构建日志打印 `Duplicate field`）�
 A：不要紧，生成器内部用 PSI 解析需要它（见第九章说明）。
 
 **Q：能像 EntityAnno 一样把自定义组件塞进官方 `Unit` 实体吗？**
-A：当前不能（见限制 1）。若需要该能力，需扩展 EntityGenerator 让生成的实体直接实现 `mindustry.gen.Unitc` 并接入官方组管线。
+A：`v159.7.2` 起可以：字段级 `@EntityDef` 的 `extends` 默认指向 `mindustry.gen.UnitEntity`（也可自定义基类），生成的类直接继承原版实体、可作为 `UnitType` 实体类型，用 `EntityRegistry.content(...)` 绑定（见 [5.8](#58-entityregistry)）。代价是此时实体字段/方法来自继承而非组件合并，本地组件的字段仍会合并进子类。
 
 ---
 

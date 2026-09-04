@@ -15,6 +15,7 @@ data class KtClass(
 
     // 非数据字段:存原始 superTypes 文本,扫描第二阶段用类名索引把简单名解析成 FQN
     var rawSuperTypes: List<String> = superTypes
+    var imports: Map<String, String> = emptyMap()
 }
 
 enum class Kind { CLASS, INTERFACE, OBJECT }

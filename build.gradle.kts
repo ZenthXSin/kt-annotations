@@ -4,5 +4,5 @@ plugins {
 
 allprojects {
     group = "io.eve.ktannot"
-    version = "v159.7.1"
+    version = "v159.7.2"
 }

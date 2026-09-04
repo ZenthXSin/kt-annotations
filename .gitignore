@@ -16,3 +16,7 @@ buildSrc/build/
 # Local
 local.properties
 build/release/
+
+# Local artifacts
+realmod.zip
+.serena/

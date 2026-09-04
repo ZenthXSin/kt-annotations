@@ -12,7 +12,8 @@ import java.io.File
  */
 object RemoteGenerator {
 
-    const val CALL_PKG = "io.eve.ktannot.gen"
+    private const val DEFAULT_CALL_PKG = "io.eve.ktannot.gen"
+    private var activePackage: String = DEFAULT_CALL_PKG
 
     private data class MethodEntry(
         val name: String,
@@ -28,7 +29,13 @@ object RemoteGenerator {
         val priority: String,
     )
 
-    fun generate(classes: List<KtClass>, outDir: File, mindustryMode: Boolean = false) {
+    fun generate(
+        classes: List<KtClass>,
+        outDir: File,
+        mindustryMode: Boolean = false,
+        genPackage: String = DEFAULT_CALL_PKG,
+    ) {
+        activePackage = genPackage
         val methods = mutableListOf<MethodEntry>()
         var lastId = 0
         val packetNames = HashSet<String>()
@@ -83,12 +90,12 @@ object RemoteGenerator {
             // packet class:先加参数字段(public),再 DATA
             val packet = TypeSpec.classBuilder(ent.packetName)
                 .addModifiers(KModifier.PUBLIC)
-                .superclass(packetBase(mindustryMode))
+                .superclass(packetBase(mindustryMode, genPackage))
             ent.params.forEachIndexed { i, p ->
                 val skipFirst = !ent.targets.targetsServer() && i == 0
                 if (!skipFirst) {
                     packet.addProperty(
-                        PropertySpec.builder(p.name, typeName(p.type, mindustryMode), KModifier.PUBLIC).mutable(true)
+                        PropertySpec.builder(p.name, typeName(p.type, mindustryMode, genPackage), KModifier.PUBLIC).mutable(true)
                             .initializer(defaultValue(p.type)).build()
                     )
                 }
@@ -108,7 +115,7 @@ object RemoteGenerator {
             // write
             val write = FunSpec.builder("write")
                 .addModifiers(KModifier.OVERRIDE)
-                .addParameter("WRITE", writesType(mindustryMode))
+                .addParameter("WRITE", writesType(mindustryMode, genPackage))
             ent.params.forEachIndexed { i, p ->
                 val skipFirst = !ent.targets.targetsServer() && i == 0
                 if (!skipFirst) {
@@ -127,7 +134,7 @@ object RemoteGenerator {
             // read
             val read = FunSpec.builder("read")
                 .addModifiers(KModifier.OVERRIDE)
-                .addParameter("READ", readsType(mindustryMode))
+                .addParameter("READ", readsType(mindustryMode, genPackage))
                 .addParameter("LENGTH", Int::class)
                 .addStatement("DATA = READ.b(LENGTH)")
                 .build()
@@ -153,10 +160,10 @@ object RemoteGenerator {
             }
             packet.addFunction(handled.build())
             // handleServer / handleClient
-            packet.addFunction(handleMethod(ent, isClient = true, mindustryMode))
-            packet.addFunction(handleMethod(ent, isClient = false, mindustryMode))
+            packet.addFunction(handleMethod(ent, isClient = true, mindustryMode, genPackage))
+            packet.addFunction(handleMethod(ent, isClient = false, mindustryMode, genPackage))
 
-            val fs = FileSpec.builder(CALL_PKG, ent.packetName)
+            val fs = FileSpec.builder(genPackage, ent.packetName)
             if (mindustryMode) fs.addImport("mindustry.io", "TypeIO")
             fs.addType(packet.build()).build().writeTo(outDir)
 
@@ -164,19 +171,19 @@ object RemoteGenerator {
 
             // call methods
             if (ent.targets.isClient() || ent.variantIsAll()) {
-                callBuilder.addFunction(callMethod(ent, toAll = true, forwarded = false, mindustryMode))
+                callBuilder.addFunction(callMethod(ent, toAll = true, forwarded = false, mindustryMode, genPackage))
             }
             if (ent.targets.isServer() && ent.variantIsOne()) {
-                callBuilder.addFunction(callMethod(ent, toAll = false, forwarded = false, mindustryMode))
+                callBuilder.addFunction(callMethod(ent, toAll = false, forwarded = false, mindustryMode, genPackage))
             }
             if (ent.targets.isServer() && ent.forward) {
-                callBuilder.addFunction(callMethod(ent, toAll = true, forwarded = true, mindustryMode))
+                callBuilder.addFunction(callMethod(ent, toAll = true, forwarded = true, mindustryMode, genPackage))
             }
         }
 
         register.addCode(registerBody.toString())
         callBuilder.addFunction(register.build())
-        FileSpec.builder(CALL_PKG, "Call").addType(callBuilder.build()).build().writeTo(outDir)
+        FileSpec.builder(genPackage, "Call").addType(callBuilder.build()).build().writeTo(outDir)
     }
 
     private fun normalizeAnn(raw: String?): String? {
@@ -186,16 +193,16 @@ object RemoteGenerator {
         return if (v in setOf("server", "client", "both", "none", "one", "all")) v else raw
     }
 
-    private fun callMethodParamType(p: KtParameter, mindustryMode: Boolean): TypeName {
+    private fun callMethodParamType(p: KtParameter, mindustryMode: Boolean, genPackage: String = activePackage): TypeName {
         // 原版 callMethod 参数保留原类型(非空);Player 在 both 下请求端非空,仅序列化时条件处理
-        return typeName(p.type, mindustryMode).let { if (it.isNullable) it.copy(nullable = false) else it }
+        return typeName(p.type, mindustryMode, genPackage).let { if (it.isNullable) it.copy(nullable = false) else it }
     }
 
-    private fun handleMethod(ent: MethodEntry, isClient: Boolean, mindustryMode: Boolean): FunSpec {
+    private fun handleMethod(ent: MethodEntry, isClient: Boolean, mindustryMode: Boolean, genPackage: String = activePackage): FunSpec {
         val name = if (isClient) "handleClient" else "handleServer"
         val builder = FunSpec.builder(name).addModifiers(KModifier.OVERRIDE)
         if (!isClient) {
-            builder.addParameter("con", conType(mindustryMode))
+            builder.addParameter("con", conType(mindustryMode, genPackage))
             builder.beginControlFlow("if (con.player == null || con.kicked)")
                 .addStatement("return")
                 .endControlFlow()
@@ -214,14 +221,14 @@ object RemoteGenerator {
         return builder.build()
     }
 
-    private fun callMethod(ent: MethodEntry, toAll: Boolean, forwarded: Boolean, mindustryMode: Boolean): FunSpec {
+    private fun callMethod(ent: MethodEntry, toAll: Boolean, forwarded: Boolean, mindustryMode: Boolean, genPackage: String = activePackage): FunSpec {
         val builder = FunSpec.builder(ent.name + if (forwarded) "__forward" else "")
             .addModifiers(KModifier.PUBLIC)
             .returns(Unit::class)
         if (!forwarded) builder.addModifiers(KModifier.PUBLIC)
 
-        if (forwarded) builder.addParameter("exceptConnection", conType(mindustryMode))
-        if (!toAll && !forwarded) builder.addParameter("playerConnection", conType(mindustryMode))
+        if (forwarded) builder.addParameter("exceptConnection", conType(mindustryMode, genPackage))
+        if (!toAll && !forwarded) builder.addParameter("playerConnection", conType(mindustryMode, genPackage))
 
         // Call 方法参数 = 原方法参数中跳过「单侧客户端时首 player」(对标原版:
         // 仅当 where 非 server 时跳过第一个 player 参数;where=both 保留 player 参数)
@@ -229,7 +236,7 @@ object RemoteGenerator {
             !(!ent.targets.targetsServer() && i == 0)
         }
         callParams.forEach { p ->
-            builder.addParameter(p.name, callMethodParamType(p, mindustryMode))
+            builder.addParameter(p.name, callMethodParamType(p, mindustryMode, genPackage))
         }
 
         // local call
@@ -274,17 +281,17 @@ object RemoteGenerator {
     }
 
     // ---- 类型/常量解析(mindustry 模式 → 真实类型) ----
-    private fun packetBase(mindustryMode: Boolean): TypeName =
-        if (mindustryMode) ClassName("mindustry.net", "Packet") else ClassName(CALL_PKG, "Packet")
+    private fun packetBase(mindustryMode: Boolean, genPackage: String = activePackage): TypeName =
+        if (mindustryMode) ClassName("mindustry.net", "Packet") else ClassName(genPackage, "Packet")
 
-    private fun writesType(mindustryMode: Boolean): TypeName =
-        if (mindustryMode) ClassName("arc.util.io", "Writes") else ClassName(CALL_PKG, "Writes")
+    private fun writesType(mindustryMode: Boolean, genPackage: String = activePackage): TypeName =
+        if (mindustryMode) ClassName("arc.util.io", "Writes") else ClassName(genPackage, "Writes")
 
-    private fun readsType(mindustryMode: Boolean): TypeName =
-        if (mindustryMode) ClassName("arc.util.io", "Reads") else ClassName(CALL_PKG, "Reads")
+    private fun readsType(mindustryMode: Boolean, genPackage: String = activePackage): TypeName =
+        if (mindustryMode) ClassName("arc.util.io", "Reads") else ClassName(genPackage, "Reads")
 
-    private fun conType(mindustryMode: Boolean): TypeName =
-        if (mindustryMode) ClassName("mindustry.net", "NetConnection") else ClassName(CALL_PKG, "NetConnection")
+    private fun conType(mindustryMode: Boolean, genPackage: String = activePackage): TypeName =
+        if (mindustryMode) ClassName("mindustry.net", "NetConnection") else ClassName(genPackage, "NetConnection")
 
     private fun netRegister(mindustryMode: Boolean): String =
         if (mindustryMode) "mindustry.net.Net.registerPacket" else "Net.registerPacket"
@@ -302,8 +309,8 @@ object RemoteGenerator {
     private fun MethodEntry.variantIsAll() = variants == "all" || variants == "both"
     private fun MethodEntry.variantIsOne() = variants == "one" || variants == "both"
 
-    private fun typeName(type: String, mindustryMode: Boolean): TypeName = when {
-        type.endsWith("Player") || type.contains("Player") -> if (mindustryMode) ClassName("mindustry.gen", "Player").copy(nullable = true) else ClassName(CALL_PKG, "Player").copy(nullable = true)
+    private fun typeName(type: String, mindustryMode: Boolean, genPackage: String): TypeName = when {
+        type.endsWith("Player") || type.contains("Player") -> if (mindustryMode) ClassName("mindustry.gen", "Player").copy(nullable = true) else ClassName(genPackage, "Player").copy(nullable = true)
         type == "Int" || type == "int" || type == "kotlin.Int" -> INT
         type == "Float" || type == "float" || type == "kotlin.Float" -> FLOAT
         type == "Boolean" || type == "boolean" || type == "kotlin.Boolean" -> BOOLEAN

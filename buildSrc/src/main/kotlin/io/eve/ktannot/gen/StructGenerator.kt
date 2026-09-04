@@ -11,17 +11,17 @@ import java.io.File
  */
 object StructGenerator {
 
-    fun generate(classes: List<KtClass>, outDir: File) {
+    fun generate(classes: List<KtClass>, outDir: File, genPackage: String = "io.eve.ktannot.gen") {
         for (cls in classes.filter { it.annotations.containsKey("Struct") }) {
             try {
-                generateOne(cls, outDir)
+                generateOne(cls, outDir, genPackage)
             } catch (e: Exception) {
                 System.err.println("[kt-annot] Struct process failed for ${cls.fullName}: ${e.message}")
             }
         }
     }
 
-    private fun generateOne(cls: KtClass, outDir: File) {
+    private fun generateOne(cls: KtClass, outDir: File, genPackage: String) {
         if (!cls.name.endsWith("Struct")) {
             System.err.println("[kt-annot] All @Struct classes must end in 'Struct': ${cls.name}")
             return
@@ -46,7 +46,7 @@ object StructGenerator {
         val structType = typeForSize(structSize)
 
         val sb = StringBuilder()
-        val pkg = cls.packageName
+        val pkg = genPackage
         sb.append("package $pkg\n\n")
         val pkgPrefix = if (pkg.isEmpty()) "" else "$pkg."
         sb.append("public object $structName {\n")
